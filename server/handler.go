@@ -4,6 +4,7 @@ import (
 	"detour/relay"
 	"log"
 	"net"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -11,6 +12,8 @@ import (
 var password = "by160101"
 
 const DOWNSTREAM_BUFSIZE = 32 * 1024
+const CONNECT_TIMEOUT = 5
+const READWRITE_TIMEOUT = 60
 
 var CLOSE = []byte("")
 
@@ -44,7 +47,7 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, c *websocket.Conn) {
 	// do connect
 	log.Println("connect:", msg.Data)
 
-	conn, err := createConnection(msg.Data)
+	conn, err := createConnection(msg.Data, c)
 	if err != nil {
 		writeMessage(c, newErrorMessage(msg, err))
 		return
@@ -69,9 +72,9 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, c *websocket.Conn) {
 	}()
 
 	// start pulling (remote => local)
-	buf := make([]byte, DOWNSTREAM_BUFSIZE)
 	log.Println("start pulling:", conn)
 	for {
+
 		select {
 		case <-conn.Quit:
 			log.Println("quit pulling:", conn)
@@ -79,14 +82,23 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, c *websocket.Conn) {
 		default:
 		}
 
+		buf := make([]byte, DOWNSTREAM_BUFSIZE)
+		(*conn.RemoteConn).SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
 		n, err := (*conn.RemoteConn).Read(buf)
 		if err != nil {
-			log.Println("pull error:", conn, err)
+			log.Println("pull remote error:", conn, err)
 			return
 		}
 
-		log.Println("pull data:", conn, n)
-		writeMessage(conn.LocalConn, newDataMessage(msg, buf))
+		log.Println("remote => local data:", conn, n)
+		err = writeMessage(conn.LocalConn, newDataMessage(msg, buf))
+		if err != nil {
+			log.Println("remote => local error:", conn, err)
+			break
+		}
+
+		// keep alive
+		h.Tracker.ImAlive(msg.Pair)
 	}
 }
 
@@ -100,20 +112,38 @@ func (h *Handler) handleData(msg *relay.RelayMessage, c *websocket.Conn) {
 		return
 	}
 
+	h.Tracker.ImAlive(msg.Pair)
+
+	// update LocalConn if needed
+	if conn.LocalConn != c {
+		writeMessage(conn.LocalConn, newSwitchMessage(msg))
+		conn.LocalConn = c
+	}
+
 	// push data => remote
+	(*conn.RemoteConn).SetWriteDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
 	n, err := (*conn.RemoteConn).Write(msg.Data.Data)
 	if err != nil {
 		log.Println("push error:", conn, err)
 		conn.Quit <- nil
 	} else {
-		log.Println("push data", conn, n)
+		log.Println("local => remote data", conn, n)
 	}
 }
 
-func createConnection(req *relay.RelayData) (*relay.ConnInfo, error) {
-	// TODO: implement this
-	net.Dial(req.Network, req.Address)
-	return nil, nil
+func createConnection(req *relay.RelayData, c *websocket.Conn) (*relay.ConnInfo, error) {
+	conn, err := net.DialTimeout(req.Network, req.Address, time.Second*CONNECT_TIMEOUT)
+	if err != nil {
+		return nil, err
+	}
+	return &relay.ConnInfo{
+		Network:    req.Network,
+		Address:    req.Address,
+		Activity:   time.Now().UnixMilli(),
+		LocalConn:  c,
+		RemoteConn: &conn,
+		Quit:       make(chan interface{}),
+	}, nil
 }
 
 func writeMessage(c *websocket.Conn, msg *relay.RelayMessage) error {
@@ -131,6 +161,13 @@ func newOKMessage(msg *relay.RelayMessage) *relay.RelayMessage {
 	return &relay.RelayMessage{
 		Pair: msg.Pair,
 		Data: &relay.RelayData{CMD: relay.CONNECT, OK: true},
+	}
+}
+
+func newSwitchMessage(msg *relay.RelayMessage) *relay.RelayMessage {
+	return &relay.RelayMessage{
+		Pair: msg.Pair,
+		Data: &relay.RelayData{CMD: relay.SWITCH, OK: true},
 	}
 }
 

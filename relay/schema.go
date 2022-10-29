@@ -12,6 +12,7 @@ type Command int
 const (
 	CONNECT Command = iota
 	DATA
+	SWITCH
 )
 
 type RelayData struct {

@@ -15,8 +15,6 @@ const DOWNSTREAM_BUFSIZE = 32 * 1024
 const CONNECT_TIMEOUT = 5
 const READWRITE_TIMEOUT = 60
 
-var CLOSE = []byte("")
-
 type Handler struct {
 	Tracker *Tracker
 	Server  *Server
@@ -108,7 +106,8 @@ func (h *Handler) handleData(msg *relay.RelayMessage, c *websocket.Conn) {
 
 	// conn is closed
 	if conn == nil || conn.RemoteConn == nil {
-		writeMessage(c, newDataMessage(msg, CLOSE))
+		// tell the local to reconnect
+		writeMessage(c, newReconnectMessage(msg))
 		return
 	}
 
@@ -168,6 +167,13 @@ func newSwitchMessage(msg *relay.RelayMessage) *relay.RelayMessage {
 	return &relay.RelayMessage{
 		Pair: msg.Pair,
 		Data: &relay.RelayData{CMD: relay.SWITCH, OK: true},
+	}
+}
+
+func newReconnectMessage(msg *relay.RelayMessage) *relay.RelayMessage {
+	return &relay.RelayMessage{
+		Pair: msg.Pair,
+		Data: &relay.RelayData{CMD: relay.RECONNECT, OK: true},
 	}
 }
 

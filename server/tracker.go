@@ -1,7 +1,7 @@
 package server
 
 import (
-	"detour/schema"
+	"detour/relay"
 
 	"github.com/google/uuid"
 )
@@ -9,24 +9,31 @@ import (
 const TIMEOUT = 60
 
 type Tracker struct {
-	Clients map[uuid.UUID]*schema.ClientInfo `json:"clients,omitempty" comment:"clientid => clientinfo"`
+	Clients map[uuid.UUID]*relay.ClientInfo `json:"clients,omitempty" comment:"clientid => clientinfo"`
 }
 
-func (t *Tracker) Add(cp schema.ConnPair, data schema.RelayData) {
-
-}
-
-func (t *Tracker) Remove(cp schema.ConnPair) {
+// Upsert ConnPair Info
+// Note that a ConnPair can be already exists in Tracker
+func (t *Tracker) Upsert(cp relay.ConnPair, conn *relay.ConnInfo) {
 	// todo
 }
 
-func (t *Tracker) ImAlive(cp schema.ConnPair) {
+func (t *Tracker) Find(cp relay.ConnPair) *relay.ConnInfo {
+	// todo
+	return nil
+}
+
+func (t *Tracker) Remove(cp relay.ConnPair) {
+	// todo
+}
+
+func (t *Tracker) ImAlive(cp relay.ConnPair) {
 	// clients, ok := t.Clients[cp.ClientId]
 	// t.ClientActivities[id] = time.Now().UnixMilli()
 }
 
-// get old clients and conns
-func (t *Tracker) GetOldPairs() []schema.ConnPair {
+// Housekeep the tracker
+func (t *Tracker) RunHouseKeeper() {
 	// now := time.Now().UnixMilli()
 	// res := make([]uuid.UUID, 0)
 	// for k, v := range t.ClientActivities {
@@ -37,8 +44,6 @@ func (t *Tracker) GetOldPairs() []schema.ConnPair {
 	// 	}
 	// }
 	// return res
-	res := make([]schema.ConnPair, 0)
-	return res
 }
 
 func NewTracker() *Tracker {

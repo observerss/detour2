@@ -1,11 +1,11 @@
 package relay
 
 import (
-	"detour/schema"
+	"bytes"
 	"detour/utils/crypto/shuffle"
 	"detour/utils/crypto/xxtea"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/gob"
 	"math/rand"
 
 	"github.com/google/uuid"
@@ -16,8 +16,8 @@ const MIN_DATA_LENGTH = 500
 const RAND_DATA_MAX = 1000
 
 type RelayMessage struct {
-	Pair schema.ConnPair   `json:"pair,omitempty"`
-	Data *schema.RelayData `json:"data,omitempty"`
+	Pair ConnPair   `json:"pair,omitempty"`
+	Data *RelayData `json:"data,omitempty"`
 }
 
 func Pack(msg *RelayMessage, password string) []byte {
@@ -33,8 +33,11 @@ func Pack(msg *RelayMessage, password string) []byte {
 	res = append(res, key...)
 
 	// padding
-	var data []byte
-	data, _ = json.Marshal(msg.Data)
+	buf := &bytes.Buffer{}
+	encoder := gob.NewEncoder(buf)
+	encoder.Encode(msg.Data)
+	data := buf.Bytes()
+	// data, _ := json.Marshal(msg.Data)
 	if len(data) < MIN_DATA_LENGTH {
 		length := uint16(rand.Intn(RAND_DATA_MAX - len(data)))
 		binary.BigEndian.AppendUint16(res, length)
@@ -91,9 +94,13 @@ func Unpack(input []byte, password string) (*RelayMessage, error) {
 	data = shuffle.Decrypt(input[:length], token)
 
 	msg := &RelayMessage{
-		Pair: schema.ConnPair{ClientId: clientId, ConnId: connId},
-		Data: &schema.RelayData{},
+		Pair: ConnPair{ClientId: clientId, ConnId: connId},
+		Data: &RelayData{},
 	}
-	json.Unmarshal(data, msg.Data)
+
+	buf := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(buf)
+	decoder.Decode(&msg.Data)
+	// json.Unmarshal(data, msg.Data)
 	return msg, nil
 }

@@ -84,7 +84,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("recv message raw: %s", message)
 		if mt == websocket.BinaryMessage {
-			go s.Handler.HandleRelay(message, c)
+			s.Handler.HandleRelay(message, c)
 		} else if mt == websocket.CloseMessage {
 			break
 		}

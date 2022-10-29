@@ -125,7 +125,7 @@ func (h *Handler) handleData(msg *relay.RelayMessage, c *websocket.Conn) {
 	n, err := (*conn.RemoteConn).Write(msg.Data.Data)
 	if err != nil {
 		log.Println("push error:", conn, err)
-		conn.Quit <- nil
+		close(conn.Quit)
 	} else {
 		log.Println("local => remote data", conn, n)
 	}

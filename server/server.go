@@ -34,6 +34,7 @@ func (s *Server) Run() {
 		Addr: s.Address,
 	}
 
+	// graceful shutdown
 	idleConnectionsClosed := make(chan struct{})
 	go func() {
 		sigint := make(chan os.Signal, 1)
@@ -43,6 +44,19 @@ func (s *Server) Run() {
 			log.Printf("HTTP Server Shutdown Error: %v", err)
 		}
 		close(idleConnectionsClosed)
+	}()
+
+	// periodically run tasks
+	go func() {
+		for {
+			select {
+			case <-idleConnectionsClosed:
+				return
+			default:
+			}
+			time.Sleep(time.Second * 10)
+			s.Handler.Tracker.RunHouseKeeper()
+		}
 	}()
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {

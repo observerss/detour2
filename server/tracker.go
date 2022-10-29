@@ -29,7 +29,7 @@ func (t *Tracker) Upsert(cp relay.ConnPair, conn *relay.ConnInfo) {
 	} else {
 		oldconn, ok := client.Conns[cp.ConnId]
 		if ok {
-			oldconn.Quit <- nil
+			close(oldconn.Quit)
 		}
 		client.Conns[cp.ConnId] = conn
 		client.Activity = time.Now().UnixMilli()
@@ -85,7 +85,7 @@ func (t *Tracker) RunHouseKeeper() {
 			totalConns += 1
 			if now-conn.Activity > 1000*ALIVE_TIMEOUT {
 				removedConns += 1
-				conn.Quit <- nil
+				close(conn.Quit)
 				connids = append(connids, connid)
 			}
 		}

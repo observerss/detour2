@@ -16,7 +16,7 @@ const MIN_DATA_LENGTH = 500
 const RAND_DATA_MAX = 1000
 
 type RelayMessage struct {
-	Pair ConnPair   `json:"pair,omitempty"`
+	Pair *ConnPair  `json:"pair,omitempty"`
 	Data *RelayData `json:"data,omitempty"`
 }
 
@@ -94,7 +94,7 @@ func Unpack(input []byte, password string) (*RelayMessage, error) {
 	data = shuffle.Decrypt(input[:length], token)
 
 	msg := &RelayMessage{
-		Pair: ConnPair{ClientId: clientId, ConnId: connId},
+		Pair: &ConnPair{ClientId: clientId, ConnId: connId},
 		Data: &RelayData{},
 	}
 

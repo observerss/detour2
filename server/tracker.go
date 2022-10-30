@@ -16,7 +16,7 @@ type Tracker struct {
 
 // Upsert ConnPair Info
 // Note that a ConnPair can be already exists in Tracker
-func (t *Tracker) Upsert(cp relay.ConnPair, conn *relay.ConnInfo) {
+func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) {
 	client, ok := t.Clients[cp.ClientId]
 	if !ok {
 		conns := make(map[uuid.UUID]*relay.ConnInfo)
@@ -37,7 +37,7 @@ func (t *Tracker) Upsert(cp relay.ConnPair, conn *relay.ConnInfo) {
 }
 
 // Find ConnInfo by ConnPair
-func (t *Tracker) Find(cp relay.ConnPair) *relay.ConnInfo {
+func (t *Tracker) Find(cp *relay.ConnPair) *relay.ConnInfo {
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		conn, ok := client.Conns[cp.ConnId]
@@ -48,7 +48,7 @@ func (t *Tracker) Find(cp relay.ConnPair) *relay.ConnInfo {
 	return nil
 }
 
-func (t *Tracker) Remove(cp relay.ConnPair) {
+func (t *Tracker) Remove(cp *relay.ConnPair) {
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		delete(client.Conns, cp.ConnId)
@@ -58,7 +58,7 @@ func (t *Tracker) Remove(cp relay.ConnPair) {
 	}
 }
 
-func (t *Tracker) ImAlive(cp relay.ConnPair) {
+func (t *Tracker) ImAlive(cp *relay.ConnPair) {
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		client.Activity = time.Now().UnixMilli()

@@ -65,11 +65,12 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, c *websocket.Conn) {
 	defer func() {
 		h.Tracker.Remove(msg.Pair)
 		if conn.RemoteConn != nil {
-			(*conn.RemoteConn).Close()
+			conn.RemoteConn.Close()
 		}
 	}()
 
 	// start pulling (remote => local)
+	buf := make([]byte, DOWNSTREAM_BUFSIZE)
 	log.Println("start pulling:", conn)
 	for {
 
@@ -80,16 +81,15 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, c *websocket.Conn) {
 		default:
 		}
 
-		buf := make([]byte, DOWNSTREAM_BUFSIZE)
-		(*conn.RemoteConn).SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
-		n, err := (*conn.RemoteConn).Read(buf)
+		conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
+		nr, err := conn.RemoteConn.Read(buf)
 		if err != nil {
 			log.Println("pull remote error:", conn, err)
 			return
 		}
 
-		log.Println("remote => local data:", conn, n)
-		err = writeMessage(conn.LocalConn, newDataMessage(msg, buf))
+		log.Println("remote => local data:", conn, nr)
+		err = writeMessage(conn.LocalConn, newDataMessage(msg, buf[0:nr]))
 		if err != nil {
 			log.Println("remote => local error:", conn, err)
 			break
@@ -120,8 +120,8 @@ func (h *Handler) handleData(msg *relay.RelayMessage, c *websocket.Conn) {
 	}
 
 	// push data => remote
-	(*conn.RemoteConn).SetWriteDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
-	n, err := (*conn.RemoteConn).Write(msg.Data.Data)
+	conn.RemoteConn.SetWriteDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
+	n, err := conn.RemoteConn.Write(msg.Data.Data)
 	if err != nil {
 		log.Println("push error:", conn, err)
 		close(conn.Quit)
@@ -140,7 +140,7 @@ func createConnection(req *relay.RelayData, c *websocket.Conn) (*relay.ConnInfo,
 		Address:    req.Address,
 		Activity:   time.Now().UnixMilli(),
 		LocalConn:  c,
-		RemoteConn: &conn,
+		RemoteConn: conn,
 		Quit:       make(chan interface{}),
 	}, nil
 }

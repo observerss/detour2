@@ -34,7 +34,7 @@ type ConnInfo struct {
 	Network    string           `json:"network,omitempty" comment:"e.g. tcp"`
 	Address    string           `json:"address,omitempty" comment:"e.g. example.com:443"`
 	Activity   int64            `json:"-"`
-	RemoteConn *net.Conn        `json:"-"`
+	RemoteConn net.Conn         `json:"-"`
 	LocalConn  *websocket.Conn  `json:"-"`
 	Quit       chan interface{} `json:"-"`
 }

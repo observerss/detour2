@@ -52,27 +52,27 @@ func NewHandler(proto string, conn net.Conn, client *Client, quit chan struct{})
 func (h *Handler) HandleConn() {
 	remote := h.Negotiator.Negotiate()
 
-	err := h.Client.Connect(h.Pair, remote)
+	remoteConn, err := h.Client.Connect(h.Pair, remote)
 	if err != nil {
 		log.Println("connect error:", h.Pair, err)
 		h.Conn.Close()
-		h.Client.Close(h.Pair)
+		remoteConn.Close()
 		return
 	}
 
 	// spawn local => remote
-	go h.Copy(h.Conn, h.Client.GetWriter(h.Pair), DOWNSTREAM_BUFSIZE, "local => remote")
+	go h.Copy(h.Conn, remoteConn, DOWNSTREAM_BUFSIZE, "local => remote")
 
 	// remote => local
-	h.Copy(h.Client.GetReader(h.Pair), h.Conn, UPSTREAM_BUFSIZE, "remote => local")
+	h.Copy(remoteConn, h.Conn, UPSTREAM_BUFSIZE, "remote => local")
 }
 
-func (h *Handler) Copy(src io.Reader, dst io.Writer, bufsize uint16, direction string) {
+func (h *Handler) Copy(src io.ReadCloser, dst io.WriteCloser, bufsize uint16, direction string) {
 	defer func() {
 		// sleep before close, let linger data, if has, to go
 		time.Sleep(time.Second)
-		h.Client.Close(h.Pair)
-		h.Conn.Close()
+		src.Close()
+		dst.Close()
 	}()
 
 	written := 0

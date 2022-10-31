@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const KEY_LENGTH = 32
+const KEY_LENGTH = 128
 const MIN_DATA_LENGTH = 500
 const RAND_DATA_MAX = 1000
 

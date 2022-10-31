@@ -3,7 +3,6 @@ package local
 import (
 	"detour/relay"
 	"errors"
-	"io"
 	"log"
 	"os"
 	"strconv"
@@ -30,6 +29,7 @@ type RemoteConn struct {
 	Connected bool
 	Conn      *websocket.Conn
 	CreatedAt time.Time
+	Pair      *relay.ConnPair
 	Switching bool
 }
 
@@ -53,7 +53,7 @@ func NewClient(remoteUrls []string) *Client {
 // GetConn lazily get connection to a server
 // a connection may only persist within around 50-60 seconds
 // after that, we deliberately disconnect and make a new connection
-func (c *Client) GetConn(cp *relay.ConnPair) (*websocket.Conn, error) {
+func (c *Client) GetConn(cp *relay.ConnPair) (*RemoteConn, error) {
 	if cp.ClientId != CLIENTID {
 		log.Println("GetConn error: ClientId does not match", CLIENTID, cp.ClientId)
 		return nil, errors.New("ClientId does not match")
@@ -65,6 +65,7 @@ func (c *Client) GetConn(cp *relay.ConnPair) (*websocket.Conn, error) {
 	}
 
 	remoteConn := c.RemoteConns[idx]
+	remoteConn.Pair = cp
 
 	// do connect if not connected
 	if !remoteConn.Connected {
@@ -80,7 +81,7 @@ func (c *Client) GetConn(cp *relay.ConnPair) (*websocket.Conn, error) {
 		go c.SwitchRemote(remoteConn)
 	}
 
-	return remoteConn.Conn, nil
+	return remoteConn, nil
 }
 
 func (c *Client) FindIdx(connid uuid.UUID) (int, error) {
@@ -175,42 +176,88 @@ func (c *Client) RetryUrl(url string) {
 }
 
 // Connect makes a CONNECT call to server
-func (c *Client) Connect(cp *relay.ConnPair, remote *Remote) error {
+func (c *Client) Connect(cp *relay.ConnPair, remote *Remote) (*RemoteConn, error) {
 	conn, err := c.GetConn(cp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = writeMessage(conn, newConnectMessage(cp, remote.Network, remote.Address))
+	err = writeMessage(conn.Conn, newConnectMessage(cp, remote.Network, remote.Address))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	msg, err := readMessage(conn)
+	msg, err := readMessage(conn.Conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !msg.Data.OK {
-		return errors.New("remote error: " + msg.Data.MSG)
+		return nil, errors.New("remote error: " + msg.Data.MSG)
 	}
 
-	return nil
+	return conn, nil
 }
 
-func (c *Client) GetReader(cp *relay.ConnPair) io.Reader {
-	// TODO: implement this
-	return nil
+func (r *RemoteConn) Read(buf []byte) (int, error) {
+	if !r.Connected {
+		return 0, errors.New("not connected")
+	}
+
+	mt, data, err := r.Conn.ReadMessage()
+	if err != nil {
+		return 0, err
+	}
+	if mt != websocket.BinaryMessage {
+		return 0, errors.New("unexpected message type: " + strconv.Itoa(mt))
+	}
+
+	msg, err := relay.Unpack(data, password)
+	if err != nil {
+		return 0, err
+	}
+
+	if msg.Pair.ClientId != r.Pair.ClientId || msg.Pair.ConnId != r.Pair.ConnId {
+		return 0, errors.New("message routing error: clientid " +
+			msg.Pair.ClientId.String() + " != " + r.Pair.ClientId.String() +
+			" or connid " + msg.Pair.ConnId.String() + " != " + r.Pair.ConnId.String())
+	}
+
+	switch msg.Data.CMD {
+	case relay.RECONNECT:
+		// remote connection has lost, should reconnect
+		// currently we just report an error
+		return 0, errors.New("remote connection lost, reconnect first")
+	case relay.SWITCH:
+		// switch to new connection, which should be updated in RemoteConn already, do nothing
+		log.Println("switch(noop)")
+		return r.Read(buf)
+	case relay.DATA:
+		copied := copy(msg.Data.Data, buf)
+		if copied < len(msg.Data.Data) {
+			log.Println("read buffer overflow, this should not happen, incress receive buffer size!")
+		}
+		return copied, nil
+	default:
+		return 0, errors.New("unexpected cmd: " + strconv.Itoa(int(msg.Data.CMD)))
+	}
 }
 
-func (c *Client) GetWriter(cp *relay.ConnPair) io.Writer {
-	// TODO: implement this
-	return nil
+func (r *RemoteConn) Write(data []byte) (int, error) {
+	if !r.Connected {
+		return 0, errors.New("not connected")
+	}
+
+	err := writeMessage(r.Conn, newDataMessage(r.Pair, data))
+	if err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
 
-func (c *Client) Close(cp *relay.ConnPair) error {
-	// TODO: implement this
-	return nil
+func (r *RemoteConn) Close() error {
+	r.Connected = false
+	return r.Conn.Close()
 }
 
 func writeMessage(c *websocket.Conn, msg *relay.RelayMessage) error {
@@ -231,20 +278,6 @@ func readMessage(c *websocket.Conn) (*relay.RelayMessage, error) {
 	}
 }
 
-// func newErrorMessage(msg *relay.RelayMessage, err error) *relay.RelayMessage {
-// 	return &relay.RelayMessage{
-// 		Pair: msg.Pair,
-// 		Data: &relay.RelayData{CMD: relay.CONNECT, OK: false, MSG: err.Error()},
-// 	}
-// }
-
-// func newOKMessage(msg *relay.RelayMessage) *relay.RelayMessage {
-// 	return &relay.RelayMessage{
-// 		Pair: msg.Pair,
-// 		Data: &relay.RelayData{CMD: relay.CONNECT, OK: true},
-// 	}
-// }
-
 func newConnectMessage(cp *relay.ConnPair, network string, address string) *relay.RelayMessage {
 	return &relay.RelayMessage{
 		Pair: cp,
@@ -252,9 +285,9 @@ func newConnectMessage(cp *relay.ConnPair, network string, address string) *rela
 	}
 }
 
-// func newDataMessage(msg *relay.RelayMessage, data []byte) *relay.RelayMessage {
-// 	return &relay.RelayMessage{
-// 		Pair: msg.Pair,
-// 		Data: &relay.RelayData{CMD: relay.DATA, Data: data},
-// 	}
-// }
+func newDataMessage(cp *relay.ConnPair, data []byte) *relay.RelayMessage {
+	return &relay.RelayMessage{
+		Pair: cp,
+		Data: &relay.RelayData{CMD: relay.DATA, Data: data},
+	}
+}

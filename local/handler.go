@@ -6,7 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
-	"time"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -16,16 +16,18 @@ const DOWNSTREAM_BUFSIZE = 16 * 1024
 const UPSTREAM_BUFSIZE = 32 * 1024
 
 type Handler struct {
-	Pair       *relay.ConnPair
-	Conn       net.Conn
-	Client     *Client
-	Quit       chan struct{}
-	Stop       chan struct{}
-	Negotiator Negotiator
+	Pair     *relay.ConnPair
+	Conn     net.Conn
+	Client   *Client
+	Quit     chan struct{}
+	Stop     chan interface{}
+	Protocol Protocol
+	Closed   bool
 }
 
-type Negotiator interface {
-	Negotiate() *Remote
+type Protocol interface {
+	Init() *Remote
+	Bind(error) error
 }
 
 type Remote struct {
@@ -37,76 +39,90 @@ func NewHandler(proto string, conn net.Conn, client *Client, quit chan struct{})
 	handler := &Handler{Conn: conn, Client: client, Quit: quit}
 	switch proto {
 	case "shadowsocks":
-		handler.Negotiator = &ShadowNegotiator{Handler: handler}
+		handler.Protocol = &ShadowProtocol{Conn: conn}
 	case "socks5":
-		handler.Negotiator = &Socks5Negotiator{Handler: handler}
+		handler.Protocol = &Socks5Protocol{Conn: conn}
 	default:
 		return nil, errors.New("proto not supported: " + proto)
 	}
 	connid, _ := uuid.NewUUID()
 	handler.Pair = &relay.ConnPair{ClientId: CLIENTID, ConnId: connid}
-	handler.Stop = make(chan struct{})
+	handler.Stop = make(chan interface{})
 	return handler, nil
 }
 
 func (h *Handler) HandleConn() {
-	remote := h.Negotiator.Negotiate()
+	remote := h.Protocol.Init()
 
-	remoteConn, err := h.Client.Connect(h.Pair, remote)
+	connByPair, err := h.Client.Connect(h.Pair, remote)
+
+	err = h.Protocol.Bind(err)
 	if err != nil {
-		log.Println("connect error:", h.Pair, err)
+		log.Println("connect error:", err)
 		h.Conn.Close()
-		remoteConn.Close()
+		connByPair.Close()
 		return
 	}
 
+	log.Println("connect ok:", remote.Address)
+
 	// spawn local => remote
-	go h.Copy(h.Conn, remoteConn, DOWNSTREAM_BUFSIZE, "local => remote")
+	go h.Copy(h.Conn, connByPair, DOWNSTREAM_BUFSIZE, "local => remote")
 
 	// remote => local
-	h.Copy(remoteConn, h.Conn, UPSTREAM_BUFSIZE, "remote => local")
+	h.Copy(connByPair, h.Conn, UPSTREAM_BUFSIZE, "remote => local")
 }
 
 func (h *Handler) Copy(src io.ReadCloser, dst io.WriteCloser, bufsize uint16, direction string) {
-	defer func() {
-		// sleep before close, let linger data, if has, to go
-		time.Sleep(time.Second)
-		src.Close()
-		dst.Close()
-	}()
-
-	written := 0
 	buf := make([]byte, bufsize)
+	read := make(chan int)
+	waitread := make(chan interface{})
+	go func() {
+		for {
+			nr, err := src.Read(buf)
+			if err != nil && err != io.EOF {
+				if !strings.Contains(err.Error(), "closed") {
+					log.Println(direction, "read error:", err)
+				}
+				h.Stop <- nil
+				src.Close()
+				return
+			}
+			read <- nr
+			if nr == 0 {
+				src.Close()
+				break
+			}
+			<-waitread
+		}
+	}()
 
 	for {
 		select {
 		case <-h.Quit:
-			log.Println(h.Pair, direction, "quit")
+			log.Println(direction, "quit")
 			return
 		case <-h.Stop:
-			log.Println(h.Pair, direction, "stop:")
+			log.Println(direction, "stop:")
+			// time.Sleep(time.Second)
+			dst.Close()
 			return
-		default:
-		}
-
-		nr, err := src.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				dst.Write([]byte{})
-				log.Println(h.Pair, direction, "read eof, total copied:", written)
-			} else {
-				log.Println(h.Pair, direction, "read error:", err, "total copied:", written)
+		case nr := <-read:
+			// log.Println(direction, "write ===> ", buf[0:100])
+			nw, err := dst.Write(buf[0:nr])
+			if err != nil {
+				log.Println(direction, "write error:", err)
+				return
 			}
-			close(h.Stop)
-			return
-		}
+			log.Println(direction, ":", nw)
 
-		nw, err := dst.Write(buf[0:nr])
-		if err != nil {
-			log.Println(h.Pair, direction, "write error:", err, "total copied", written)
-			return
+			if nw == 0 {
+				h.Stop <- nil
+				// time.Sleep(time.Second)
+				dst.Close()
+				return
+			}
+			waitread <- nil
 		}
-
-		written += nw
 	}
 }

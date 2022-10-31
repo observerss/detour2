@@ -29,7 +29,7 @@ func Pack(msg *RelayMessage, password string) []byte {
 	token := make([]byte, KEY_LENGTH)
 	rand.Read(token)
 	key := xxtea.Encrypt(token, []byte(password))
-	binary.BigEndian.AppendUint16(res, uint16(len(key)))
+	res = binary.BigEndian.AppendUint16(res, uint16(len(key)))
 	res = append(res, key...)
 
 	// padding
@@ -40,17 +40,17 @@ func Pack(msg *RelayMessage, password string) []byte {
 	// data, _ := json.Marshal(msg.Data)
 	if len(data) < MIN_DATA_LENGTH {
 		length := uint16(rand.Intn(RAND_DATA_MAX - len(data)))
-		binary.BigEndian.AppendUint16(res, length)
+		res = binary.BigEndian.AppendUint16(res, length)
 		padding := make([]byte, length)
 		rand.Read(padding)
 		res = append(res, padding...)
 	} else {
-		binary.BigEndian.AppendUint16(res, 0)
+		res = binary.BigEndian.AppendUint16(res, 0)
 	}
 
 	// data
 	data = shuffle.Encrypt(data, token)
-	binary.BigEndian.AppendUint32(res, uint32(len(data)))
+	res = binary.BigEndian.AppendUint32(res, uint32(len(data)))
 	res = append(res, data...)
 
 	return res
@@ -89,9 +89,9 @@ func Unpack(input []byte, password string) (*RelayMessage, error) {
 	input = input[length:] // ignore padding
 
 	// data
-	length = uint32(binary.BigEndian.Uint16(input[:4]))
-	input = input[4:]
-	data = shuffle.Decrypt(input[:length], token)
+	length = uint32(binary.BigEndian.Uint32(input[:4]))
+	input = input[4 : 4+length]
+	data = shuffle.Decrypt(input, token)
 
 	msg := &RelayMessage{
 		Pair: &ConnPair{ClientId: clientId, ConnId: connId},

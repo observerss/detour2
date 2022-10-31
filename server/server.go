@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,12 +16,17 @@ import (
 var upgrader = websocket.Upgrader{}
 
 type Server struct {
-	Address string
-	Handler *Handler
+	Address  string
+	Network  string
+	Password string
+	Handler  *Handler
 }
 
-func NewServer(address string) *Server {
-	server := &Server{Address: address}
+func NewServer(listen string, password string) *Server {
+	vals := strings.Split(listen, "://")
+	network := vals[0]
+	address := vals[1]
+	server := &Server{Address: address, Network: network, Password: password}
 	server.Handler = NewHandler(server)
 	return server
 }
@@ -94,11 +100,12 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		mt, message, err := c.ReadMessage()
 
 		if err != nil {
-			log.Println("read error:", err)
+			if !strings.Contains(err.Error(), "1006") {
+				log.Println("read error:", err)
+			}
 			break
 		}
 
-		log.Printf("recv message raw: %s", message)
 		if mt == websocket.BinaryMessage {
 			s.Handler.HandleRelay(message, c)
 		} else if mt == websocket.CloseMessage {

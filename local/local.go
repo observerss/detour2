@@ -5,24 +5,31 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 )
 
-var proto = "socks5"
-
 type Local struct {
+	Network    string
 	Address    string
+	Proto      string
+	Password   string
 	RemoteUrls []string
 }
 
-func NewLocal(address string, remoteUrls []string) *Local {
-	return &Local{RemoteUrls: remoteUrls}
+func NewLocal(listen string, remote string, proto string, password string) *Local {
+	vals := strings.Split(listen, "://")
+	network := vals[0]
+	address := vals[1]
+	remoteUrls := strings.Split(remote, ",")
+	return &Local{RemoteUrls: remoteUrls, Network: network, Address: address, Password: password, Proto: proto}
 }
 
 func (l *Local) Run() {
-	listener, err := net.Listen("tcp", l.Address)
-	client := NewClient(l.RemoteUrls)
+	log.Println("Listening on", l.Address)
+	listener, err := net.Listen(l.Network, l.Address)
+	client := NewClient(l.RemoteUrls, l.Password)
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)
@@ -40,8 +47,9 @@ func (l *Local) Run() {
 	// server loop
 	wg := sync.WaitGroup{}
 	connch := make(chan net.Conn)
-	for {
-		go func() {
+
+	go func() {
+		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				log.Println("accept error:", err)
@@ -49,8 +57,10 @@ func (l *Local) Run() {
 			} else {
 				connch <- conn
 			}
-		}()
+		}
+	}()
 
+	for {
 		select {
 		case <-quit:
 			wg.Wait()
@@ -58,7 +68,7 @@ func (l *Local) Run() {
 			return
 		case conn := <-connch:
 			if conn != nil {
-				handler, err := NewHandler(proto, conn, client, quit)
+				handler, err := NewHandler(l.Proto, conn, client, quit)
 				if err != nil {
 					log.Println("create handler error:", err)
 				} else {

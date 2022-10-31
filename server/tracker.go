@@ -107,5 +107,5 @@ func (t *Tracker) RunHouseKeeper() {
 }
 
 func NewTracker() *Tracker {
-	return &Tracker{}
+	return &Tracker{Clients: make(map[uuid.UUID]*relay.ClientInfo)}
 }

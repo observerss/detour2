@@ -98,34 +98,22 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	log.Println("upgraded")
 
 	writer := make(chan *relay.RelayMessage)
-	quit := make(chan interface{})
 	defer func() {
-		close(quit)
 		c.Close()
 	}()
 
 	// spawn writer
 	go func() {
 		for {
-			select {
-			case <-quit:
-				log.Println("writer quit")
-				return
-			default:
-			}
 			msg := <-writer
 			if msg == nil {
-				log.Println("writer nil")
+				log.Println("writer channel nil")
 				return
 			}
-			// if msg.Data.CMD != relay.DATA {
-			// 	log.Println("real write", msg.Pair.ConnId, msg.Data)
-			// } else {
-			// 	log.Println("real write", msg.Pair.ConnId, len(msg.Data.Data))
-			// }
 			err := c.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, s.Password))
+			log.Println("websocket sent", len(relay.Pack(msg, s.Password)))
 			if err != nil {
-				log.Println("quit writer on error:", err)
+				log.Println("writer channel error:", err)
 				return
 			}
 		}
@@ -134,12 +122,13 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	// block on reader
 	for {
 		mt, message, err := c.ReadMessage()
+		log.Println("websocket got", mt, len(message))
 
 		if err != nil {
 			if !strings.Contains(err.Error(), "1006") {
-				log.Println("reader error:", err)
+				log.Println("websocket error:", err)
 			} else {
-				log.Println("reader 1006")
+				log.Println("websocket 1006")
 			}
 			break
 		}

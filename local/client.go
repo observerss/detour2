@@ -66,6 +66,7 @@ func NewClient(remoteUrls []string, password string) *Client {
 			Connected: false,
 			Switching: false,
 		})
+		client.ConnectRemote(client.RemoteConns[0])
 		client.CanConnect[url] = true
 	}
 	return client
@@ -83,16 +84,16 @@ func (c *Client) GetConn(cp *relay.ConnPair) (*RemoteConn, error) {
 		return nil, errors.New("ClientId does not match")
 	}
 
-	idx, err := c.FindIdx(cp.ConnId)
-	if err != nil {
-		log.Println("GetConn error:", err)
-	}
+	// idx, err := c.FindIdx(cp.ConnId)
+	// if err != nil {
+	// 	log.Println("GetConn error:", err)
+	// }
 
-	remoteConn := c.RemoteConns[idx]
+	remoteConn := c.RemoteConns[0]
 
 	// do connect if not connected
 	if !remoteConn.Connected {
-		err = c.ConnectRemote(cp.ConnId, remoteConn)
+		err := c.ConnectRemote(remoteConn)
 		if err != nil {
 			return nil, err
 		}
@@ -136,8 +137,7 @@ func (c *Client) FindIdx(connid uuid.UUID) (int, error) {
 	return idx, nil
 }
 
-func (c *Client) ConnectRemote(connid uuid.UUID, remoteConn *RemoteConn) error {
-	log.Println("dail websocket", connid)
+func (c *Client) ConnectRemote(remoteConn *RemoteConn) error {
 	dailer := websocket.Dialer{}
 	dailer.HandshakeTimeout = time.Second * 3
 
@@ -229,7 +229,7 @@ func (c *Client) RemoteReader(conn *RemoteConn) {
 		mt, data, err := conn.Conn.ReadMessage()
 
 		if err != nil {
-			log.Println("readererror:", conn.Url, err)
+			log.Println("reader error:", conn.Url, err)
 			return
 		}
 

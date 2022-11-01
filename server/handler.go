@@ -9,7 +9,7 @@ import (
 )
 
 const DOWNSTREAM_BUFSIZE = 32 * 1024
-const CONNECT_TIMEOUT = 1
+const CONNECT_TIMEOUT = 3
 const READWRITE_TIMEOUT = 60
 
 type Handler struct {
@@ -23,7 +23,6 @@ func NewHandler(server *Server) *Handler {
 
 func (h *Handler) HandleRelay(data []byte, writer chan *relay.RelayMessage) {
 	msg, err := relay.Unpack(data, h.Server.Password)
-	// log.Println("read:", msg.Data)
 	if err != nil {
 		log.Println("unpack error:", err)
 		return
@@ -43,16 +42,11 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 	// do connect
 	log.Println("connect:", msg.Data.Address)
 
-	// disconnect old
-	old := h.Tracker.Find(msg.Pair)
-	if old != nil {
-		old.RemoteConn.Close()
-		writer <- nil
-	}
-
 	conn, err := createConnection(msg.Data, writer)
 	if err != nil {
+		log.Println("connect error:", err)
 		writer <- newErrorMessage(msg, err)
+		writer <- nil
 		return
 	}
 
@@ -61,9 +55,10 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 
 	// connect success, update tracker
 	h.Tracker.Upsert(msg.Pair, conn)
+
 	defer func() {
 		log.Println("stopped pulling:", conn.Address)
-		h.Tracker.Remove(msg.Pair)
+		// h.Tracker.Remove(msg.Pair)
 		if conn.RemoteConn != nil {
 			conn.RemoteConn.Close()
 		}
@@ -78,12 +73,8 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 		conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
 		nr, err := conn.RemoteConn.Read(buf)
 		if err != nil && err != io.EOF {
-			if err == net.ErrClosed {
-				// closed by EOF
-				return
-			}
 			log.Println("pull remote error:", err)
-			return
+			break
 		}
 
 		writer <- newDataMessage(msg, buf[0:nr])
@@ -93,7 +84,7 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 			break
 		}
 		// keep alive
-		h.Tracker.ImAlive(msg.Pair)
+		// h.Tracker.ImAlive(msg.Pair)
 	}
 }
 

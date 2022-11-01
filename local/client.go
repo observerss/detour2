@@ -3,6 +3,7 @@ package local
 import (
 	"detour/relay"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 
 var CLIENTID, _ = uuid.NewUUID()
 var TIME_TO_LIVE = time.Second * 56
-var lock = sync.Mutex{}
 
 type Client struct {
 	Password      string
@@ -24,26 +24,24 @@ type Client struct {
 	CanConnect    map[string]bool
 	ConnIdRemotes map[uuid.UUID]int
 	currIdx       int
+	Lock          sync.Mutex
 }
 
 type RemoteConn struct {
-	Url       string
-	Connected bool
-	Conn      *websocket.Conn
-	CreatedAt time.Time
-	Switching bool
-	Password  string
-	Channels  map[uuid.UUID]*RemoteConnChannels
-	WriteChan chan *WriteData
+	Client       *Client
+	Url          string
+	Connected    bool
+	Conn         *websocket.Conn
+	CreatedAt    time.Time
+	Switching    bool
+	Password     string
+	ReadChannels map[uuid.UUID]chan *relay.RelayData
+	WriteChan    chan *WriteData
 }
 
 type WriteData struct {
 	ConnId uuid.UUID
 	Data   *relay.RelayData
-}
-
-type RemoteConnChannels struct {
-	ReadChan chan *relay.RelayData
 }
 
 type ConnByPair struct {
@@ -63,6 +61,7 @@ func NewClient(remoteUrls []string, password string) *Client {
 	}
 	for _, url := range remoteUrls {
 		client.RemoteConns = append(client.RemoteConns, &RemoteConn{
+			Client:    client,
 			Url:       url,
 			Connected: false,
 			Switching: false,
@@ -76,6 +75,9 @@ func NewClient(remoteUrls []string, password string) *Client {
 // a connection may only persist within around 50-60 seconds
 // after that, we deliberately disconnect and make a new connection
 func (c *Client) GetConn(cp *relay.ConnPair) (*RemoteConn, error) {
+	c.Lock.Lock()
+	defer c.Lock.Unlock()
+
 	if cp.ClientId != CLIENTID {
 		log.Println("GetConn error: ClientId does not match", CLIENTID, cp.ClientId)
 		return nil, errors.New("ClientId does not match")
@@ -96,16 +98,16 @@ func (c *Client) GetConn(cp *relay.ConnPair) (*RemoteConn, error) {
 		}
 	}
 
-	_, ok := remoteConn.Channels[cp.ConnId]
+	_, ok := remoteConn.ReadChannels[cp.ConnId]
 	if !ok {
-		remoteConn.Channels[cp.ConnId] = &RemoteConnChannels{ReadChan: make(chan *relay.RelayData)}
+		remoteConn.ReadChannels[cp.ConnId] = make(chan *relay.RelayData)
 	}
 
 	// switch connection if TIME_TO_LIVE has passed
-	if time.Since(remoteConn.CreatedAt) > TIME_TO_LIVE && !remoteConn.Switching {
-		remoteConn.Switching = true
-		go c.SwitchRemote(remoteConn)
-	}
+	// if time.Since(remoteConn.CreatedAt) > TIME_TO_LIVE && !remoteConn.Switching {
+	// 	remoteConn.Switching = true
+	// 	go c.SwitchRemote(remoteConn)
+	// }
 
 	return remoteConn, nil
 }
@@ -135,6 +137,7 @@ func (c *Client) FindIdx(connid uuid.UUID) (int, error) {
 }
 
 func (c *Client) ConnectRemote(connid uuid.UUID, remoteConn *RemoteConn) error {
+	log.Println("dail websocket", connid)
 	dailer := websocket.Dialer{}
 	dailer.HandshakeTimeout = time.Second * 3
 
@@ -150,7 +153,7 @@ func (c *Client) ConnectRemote(connid uuid.UUID, remoteConn *RemoteConn) error {
 	remoteConn.Connected = true
 	remoteConn.Password = c.Password
 	remoteConn.CreatedAt = time.Now()
-	remoteConn.Channels = make(map[uuid.UUID]*RemoteConnChannels)
+	remoteConn.ReadChannels = make(map[uuid.UUID]chan *relay.RelayData)
 	remoteConn.WriteChan = make(chan *WriteData)
 
 	go c.RemoteReader(remoteConn)
@@ -209,11 +212,16 @@ func (c *Client) RetryUrl(url string) {
 }
 
 func (c *Client) RemoteReader(conn *RemoteConn) {
+	defer func() {
+		log.Println("reader closed", conn.Url)
+		conn.Connected = false
+	}()
+
 	for {
-		// log.Println("loop reader start", conn.Url)
+		log.Println("reader waiting for", conn.Url, &conn.Conn)
 
 		if !conn.Connected {
-			log.Println("client reader wait for connect...")
+			log.Println("reader wait for connect...")
 			time.Sleep(time.Second)
 			continue
 		}
@@ -221,45 +229,51 @@ func (c *Client) RemoteReader(conn *RemoteConn) {
 		mt, data, err := conn.Conn.ReadMessage()
 
 		if err != nil {
-			log.Println("client read error:", conn.Url, err)
+			log.Println("readererror:", conn.Url, err)
 			return
 		}
 
 		if mt != websocket.BinaryMessage {
-			log.Println("client message type error:", conn.Url, mt)
+			log.Println("reader message type error:", conn.Url, mt)
 			return
 		}
 
 		msg, err := relay.Unpack(data, c.Password)
 		if err != nil {
-			log.Println("client message unpack error", conn.Url, err)
+			log.Println("reader message unpack error", conn.Url, err)
 			return
 		}
+
+		log.Println("reader got", msg.Pair.ConnId.String()[:8], msg.Data.CMD, len(msg.Data.Data))
 
 		idx, err := c.FindIdx(msg.Pair.ConnId)
 		if err != nil {
-			log.Println("client findidx error:", err)
-			return
+			log.Println("reader findidx error:", err)
+			continue
 		}
 
 		remoteConn := c.RemoteConns[idx]
-		chs, ok := remoteConn.Channels[msg.Pair.ConnId]
+		chr, ok := remoteConn.ReadChannels[msg.Pair.ConnId]
 		if !ok {
-			log.Println("client read can't find channel", msg.Pair.ConnId)
-			return
+			log.Println("reader can't find channel", msg.Pair.ConnId)
+			continue
 		}
 
-		// log.Println("reader got data:", msg.Data)
-		chs.ReadChan <- msg.Data
+		chr <- msg.Data
 	}
 }
 
 func (c *Client) RemoteWriter(conn *RemoteConn) {
+	defer func() {
+		log.Println("writer closed", conn.Url)
+		conn.Connected = false
+	}()
+
 	for {
-		// log.Println("loop writer start", conn.Url, conn.WriteChan)
+		log.Println("writer waiting for", conn.Url, &conn.Conn)
 
 		if !conn.Connected {
-			log.Println("client writer wait for connect...", conn.Url)
+			log.Println("writer wait for connect...", conn.Url)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -267,17 +281,17 @@ func (c *Client) RemoteWriter(conn *RemoteConn) {
 		wd := <-conn.WriteChan
 
 		if wd == nil {
-			log.Println("client writer quit", conn.Url)
+			log.Println("writer quit", conn.Url)
 			break
 		}
 
-		// log.Println("writer got data:", wd.Data)
+		log.Println("writer got", wd.ConnId.String()[:8], wd.Data.CMD, len(wd.Data.Data))
 
 		msg := &relay.RelayMessage{Pair: &relay.ConnPair{ClientId: CLIENTID, ConnId: wd.ConnId}, Data: wd.Data}
 
 		err := conn.Conn.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, c.Password))
 		if err != nil {
-			log.Println("client writer error:", conn.Url, err)
+			log.Println("writer error:", conn.Url, err)
 			break
 		}
 	}
@@ -297,71 +311,81 @@ func (c *Client) Connect(cp *relay.ConnPair, remote *Remote) (*ConnByPair, error
 
 	connByPair.WriteConnect(remote.Network, remote.Address)
 
-	data := <-conn.Channels[cp.ConnId].ReadChan
+	chr := conn.ReadChannels[cp.ConnId]
+	log.Println("wait for connect result", cp.ConnId.String()[:8], chr)
+	data := <-chr
+	log.Println("read data ok", cp.ConnId.String()[:8])
 
 	if !data.OK {
-		return nil, errors.New("remote error: " + data.MSG)
+		return nil, errors.New("remote error: " + data.MSG + " " + cp.ConnId.String()[:8])
 	}
 
-	return &ConnByPair{Pair: cp, Conn: conn}, nil
+	return connByPair, nil
 }
 
 func (c *ConnByPair) Read(buf []byte) (int, error) {
-	ch, ok := c.Conn.Channels[c.Pair.ConnId]
+	ch, ok := c.Conn.ReadChannels[c.Pair.ConnId]
 	if !ok {
-		return 0, errors.New("reader already closed")
+		return 0, errors.New("reader already closed" + c.Pair.ConnId.String()[:8])
 	}
 
-	data := <-ch.ReadChan
+	log.Println("block on read", c.Pair.ConnId.String()[:8])
+	data := <-ch
+
+	if data == nil {
+		log.Println("go nil read", c.Pair.ConnId.String()[:8])
+		return 0, io.EOF
+	}
 
 	switch data.CMD {
 	case relay.RECONNECT:
 		// remote connection has lost, should reconnect
 		// currently we just report an error
 		return 0, errors.New("remote connection lost, reconnect first")
+
 	case relay.SWITCH:
 		// switch to new connection, which should be updated in RemoteConn already, do nothing
 		log.Println("switch(noop)")
 		return c.Read(buf)
+
 	case relay.DATA:
 		copied := copy(buf, data.Data)
 		// log.Println("copied", copied)
 		if copied < len(data.Data) {
-			log.Println("read buffer overflow, this should not happen, incress receive buffer size!")
+			log.Println("read buffer overflow, this should not happen, incress receive buffer size! " + c.Pair.ConnId.String()[:8])
+		}
+		if copied == 0 {
+			return 0, io.EOF
 		}
 		return copied, nil
 	default:
-		return 0, errors.New("unexpected cmd: " + strconv.Itoa(int(data.CMD)))
+		return 0, errors.New("unexpected cmd: " + strconv.Itoa(int(data.CMD)) + c.Pair.ConnId.String()[:8])
 	}
 }
 
 func (c *ConnByPair) WriteConnect(network string, address string) {
+	log.Println("write to", c.Pair.ConnId.String()[:8], "connect", network, address)
 	c.Conn.WriteChan <- &WriteData{ConnId: c.Pair.ConnId, Data: &relay.RelayData{CMD: relay.CONNECT, Network: network, Address: address}}
 }
 
 func (c *ConnByPair) Write(data []byte) (int, error) {
+	log.Println("write to", c.Pair.ConnId.String()[:8], len(data))
 	c.Conn.WriteChan <- &WriteData{ConnId: c.Pair.ConnId, Data: &relay.RelayData{CMD: relay.DATA, Data: data}}
 	return len(data), nil
 }
 
 func (c *ConnByPair) Close() error {
-	delete(c.Conn.Channels, c.Pair.ConnId)
-	return nil
-}
-
-func (r *RemoteConn) writeMessage(c *websocket.Conn, msg *relay.RelayMessage) error {
-	// if msg.Data.CMD == relay.DATA {
-	// 	log.Println("write:", len(msg.Data.Data))
-	// }
-
-	lock.Lock()
-	defer lock.Unlock()
-	return c.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, r.Password))
-}
-
-func newConnectMessage(cp *relay.ConnPair, network string, address string) *relay.RelayMessage {
-	return &relay.RelayMessage{
-		Pair: cp,
-		Data: &relay.RelayData{CMD: relay.CONNECT, Network: network, Address: address},
+	if c != nil && c.Conn != nil && c.Conn.ReadChannels != nil && c.Pair != nil {
+		ch, ok := c.Conn.ReadChannels[c.Pair.ConnId]
+		if ok {
+			log.Println("send nil to", c.Pair.ConnId.String()[:8])
+			ch <- nil
+			log.Println("nil sent", c.Pair.ConnId.String()[:8])
+		}
+		delete(c.Conn.ReadChannels, c.Pair.ConnId)
 	}
+	if c != nil && c.Conn != nil && c.Conn.Client != nil && c.Conn.Client.ConnIdRemotes != nil && c.Pair != nil {
+		delete(c.Conn.Client.ConnIdRemotes, c.Pair.ConnId)
+	}
+	return nil
 }

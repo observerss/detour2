@@ -4,7 +4,6 @@ import (
 	"net"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 )
 
 type Command int
@@ -28,6 +27,7 @@ type RelayData struct {
 type ClientInfo struct {
 	Conns    map[uuid.UUID]*ConnInfo `json:"conns,omitempty" comment:"connid => conninfo"`
 	Activity int64                   `json:"-"`
+	Quit     chan interface{}        `json:"-"`
 }
 
 type ConnInfo struct {
@@ -35,8 +35,8 @@ type ConnInfo struct {
 	Address    string           `json:"address,omitempty" comment:"e.g. example.com:443"`
 	Activity   int64            `json:"-"`
 	RemoteConn net.Conn         `json:"-"`
-	LocalConn  *websocket.Conn  `json:"-"`
 	Quit       chan interface{} `json:"-"`
+	Writer     chan *RelayMessage
 }
 
 type ConnPair struct {

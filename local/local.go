@@ -63,6 +63,7 @@ func (l *Local) Run() {
 	for {
 		select {
 		case <-quit:
+			listener.Close()
 			wg.Wait()
 			log.Println("byebye")
 			return

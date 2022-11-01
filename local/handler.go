@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"strings"
 
 	"github.com/google/uuid"
 )
@@ -45,16 +44,23 @@ func NewHandler(proto string, conn net.Conn, client *Client, quit chan struct{})
 	default:
 		return nil, errors.New("proto not supported: " + proto)
 	}
-	connid, _ := uuid.NewUUID()
+	connid, _ := uuid.NewRandom()
+	log.Println("new handler: ", connid)
 	handler.Pair = &relay.ConnPair{ClientId: CLIENTID, ConnId: connid}
 	handler.Stop = make(chan interface{})
 	return handler, nil
 }
 
 func (h *Handler) HandleConn() {
+	log.Println("handle start.")
 	remote := h.Protocol.Init()
+	if remote == nil {
+		h.Conn.Close()
+		return
+	}
 
 	connByPair, err := h.Client.Connect(h.Pair, remote)
+	log.Println("connect ok")
 
 	err = h.Protocol.Bind(err)
 	if err != nil {
@@ -64,7 +70,7 @@ func (h *Handler) HandleConn() {
 		return
 	}
 
-	log.Println("connect ok:", remote.Address)
+	log.Println("bind ok:", remote.Address)
 
 	// spawn local => remote
 	go h.Copy(h.Conn, connByPair, DOWNSTREAM_BUFSIZE, "local => remote")
@@ -75,26 +81,11 @@ func (h *Handler) HandleConn() {
 
 func (h *Handler) Copy(src io.ReadCloser, dst io.WriteCloser, bufsize uint16, direction string) {
 	buf := make([]byte, bufsize)
-	read := make(chan int)
-	waitread := make(chan interface{})
-	go func() {
-		for {
-			nr, err := src.Read(buf)
-			if err != nil && err != io.EOF {
-				if !strings.Contains(err.Error(), "closed") {
-					log.Println(direction, "read error:", err)
-				}
-				h.Stop <- nil
-				src.Close()
-				return
-			}
-			read <- nr
-			if nr == 0 {
-				src.Close()
-				break
-			}
-			<-waitread
-		}
+
+	defer func() {
+		dst.Close()
+		src.Close()
+		log.Println(direction, "closed")
 	}()
 
 	for {
@@ -104,25 +95,23 @@ func (h *Handler) Copy(src io.ReadCloser, dst io.WriteCloser, bufsize uint16, di
 			return
 		case <-h.Stop:
 			log.Println(direction, "stop:")
-			// time.Sleep(time.Second)
-			dst.Close()
 			return
-		case nr := <-read:
-			// log.Println(direction, "write ===> ", buf[0:100])
-			nw, err := dst.Write(buf[0:nr])
-			if err != nil {
-				log.Println(direction, "write error:", err)
-				return
-			}
-			log.Println(direction, ":", nw)
+		default:
+		}
 
-			if nw == 0 {
-				h.Stop <- nil
-				// time.Sleep(time.Second)
-				dst.Close()
-				return
-			}
-			waitread <- nil
+		nr, err := src.Read(buf)
+		if err != nil && err != io.EOF {
+			log.Println(direction, "read error:", err)
+			break
+		}
+		nw, err := dst.Write(buf[0:nr])
+		if err != nil {
+			log.Println(direction, "write error:", err)
+			break
+		}
+		log.Println(direction, ":", nw)
+		if nw == 0 {
+			break
 		}
 	}
 }

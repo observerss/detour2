@@ -12,7 +12,8 @@ type Socks5Protocol struct {
 
 func (s *Socks5Protocol) Init() *Remote {
 	buf := make([]byte, DOWNSTREAM_BUFSIZE)
-	_, err := s.Conn.Read(buf)
+	n, err := s.Conn.Read(buf)
+	log.Println("socks5 init", buf[:n])
 
 	if err != nil {
 		log.Println("init read error:", err)
@@ -48,7 +49,8 @@ func (s *Socks5Protocol) Init() *Remote {
 	// no auth
 	s.Conn.Write([]byte{5, 0})
 
-	_, err = s.Conn.Read(buf)
+	n, err = s.Conn.Read(buf)
+	log.Println("socks5 request", buf[:n])
 	if err != nil {
 		log.Println("request read error:", err)
 		return nil
@@ -78,6 +80,7 @@ func (s *Socks5Protocol) Init() *Remote {
 }
 
 func (s *Socks5Protocol) Bind(err error) error {
+	log.Println("socks5, write", err)
 	if err != nil {
 		s.Conn.Write([]byte{5, 1, 0, 1, 0, 0, 0, 0, 0, 0})
 		return err

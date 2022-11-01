@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"detour/relay"
 	"log"
 	"net/http"
 	"os"
@@ -54,17 +55,17 @@ func (s *Server) Run() {
 	}()
 
 	// periodically run tasks
-	go func() {
-		for {
-			select {
-			case <-idleConnectionsClosed:
-				return
-			default:
-			}
-			time.Sleep(time.Second * 10)
-			s.Handler.Tracker.RunHouseKeeper()
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		select {
+	// 		case <-idleConnectionsClosed:
+	// 			return
+	// 		default:
+	// 		}
+	// 		time.Sleep(time.Second * 10)
+	// 		s.Handler.Tracker.RunHouseKeeper()
+	// 	}
+	// }()
 
 	// listen and block
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
@@ -89,25 +90,62 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
-
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return
 	}
-	defer c.Close()
+	log.Println("upgraded")
+
+	writer := make(chan *relay.RelayMessage)
+	quit := make(chan interface{})
+	defer func() {
+		close(quit)
+		c.Close()
+	}()
+
+	// spawn writer
+	go func() {
+		for {
+			select {
+			case <-quit:
+				log.Println("writer quit")
+				return
+			default:
+			}
+			msg := <-writer
+			if msg == nil {
+				log.Println("writer nil")
+				return
+			}
+			// if msg.Data.CMD != relay.DATA {
+			// 	log.Println("real write", msg.Pair.ConnId, msg.Data)
+			// } else {
+			// 	log.Println("real write", msg.Pair.ConnId, len(msg.Data.Data))
+			// }
+			err := c.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, s.Password))
+			if err != nil {
+				log.Println("quit writer on error:", err)
+				return
+			}
+		}
+	}()
+
+	// block on reader
 	for {
 		mt, message, err := c.ReadMessage()
 
 		if err != nil {
 			if !strings.Contains(err.Error(), "1006") {
-				log.Println("read error:", err)
+				log.Println("reader error:", err)
+			} else {
+				log.Println("reader 1006")
 			}
 			break
 		}
 
 		if mt == websocket.BinaryMessage {
-			s.Handler.HandleRelay(message, c)
+			s.Handler.HandleRelay(message, writer)
 		} else if mt == websocket.CloseMessage {
 			break
 		}

@@ -16,7 +16,7 @@ type Tracker struct {
 
 // Upsert ConnPair Info
 // Note that a ConnPair can be already exists in Tracker
-func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) {
+func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) *relay.ClientInfo {
 	client, ok := t.Clients[cp.ClientId]
 	if !ok {
 		conns := make(map[uuid.UUID]*relay.ConnInfo)
@@ -24,6 +24,7 @@ func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) {
 		client = &relay.ClientInfo{
 			Conns:    conns,
 			Activity: time.Now().UnixMilli(),
+			Quit:     make(chan interface{}),
 		}
 		t.Clients[cp.ClientId] = client
 	} else {
@@ -34,6 +35,7 @@ func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) {
 		client.Conns[cp.ConnId] = conn
 		client.Activity = time.Now().UnixMilli()
 	}
+	return client
 }
 
 // Find ConnInfo by ConnPair
@@ -85,7 +87,7 @@ func (t *Tracker) RunHouseKeeper() {
 			totalConns += 1
 			if now-conn.Activity > 1000*ALIVE_TIMEOUT {
 				removedConns += 1
-				close(conn.Quit)
+				// close(conn.Quit)
 				connids = append(connids, connid)
 			}
 		}

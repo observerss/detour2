@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -101,12 +102,16 @@ func (h *Handler) Copy(src io.ReadCloser, dst io.WriteCloser, bufsize uint16, di
 
 		nr, err := src.Read(buf)
 		if err != nil && err != io.EOF {
-			log.Println(direction, "read error:", err)
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Println(direction, "read error:", err)
+			}
 			break
 		}
 		nw, err := dst.Write(buf[0:nr])
 		if err != nil {
-			log.Println(direction, "write error:", err)
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Println(direction, "write error:", err)
+			}
 			break
 		}
 		log.Println(direction, ":", nw)

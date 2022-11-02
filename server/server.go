@@ -20,7 +20,6 @@ type Server struct {
 	Address  string
 	Network  string
 	Password string
-	Handler  *Handler
 }
 
 func NewServer(listen string, password string) *Server {
@@ -28,7 +27,6 @@ func NewServer(listen string, password string) *Server {
 	network := vals[0]
 	address := vals[1]
 	server := &Server{Address: address, Network: network, Password: password}
-	server.Handler = NewHandler(server)
 	return server
 }
 
@@ -101,28 +99,30 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		c.Close()
 	}()
+	handler := NewHandler(s)
 
 	// spawn writer
 	go func() {
 		for {
 			msg := <-writer
 			if msg == nil {
-				log.Println("writer channel nil")
-				return
+				log.Println("writer channel closed")
+				break
 			}
-			err := c.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, s.Password))
-			log.Println("websocket sent", len(relay.Pack(msg, s.Password)))
+			data := relay.Pack(msg, s.Password)
+			err := c.WriteMessage(websocket.BinaryMessage, data)
+			log.Println("websocket sent", len(data))
 			if err != nil {
 				log.Println("writer channel error:", err)
-				return
+				break
 			}
 		}
 	}()
 
 	// block on reader
 	for {
-		mt, message, err := c.ReadMessage()
-		log.Println("websocket got", mt, len(message))
+		mt, data, err := c.ReadMessage()
+		log.Println("websocket got", mt, len(data))
 
 		if err != nil {
 			if !strings.Contains(err.Error(), "1006") {
@@ -134,8 +134,15 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if mt == websocket.BinaryMessage {
-			s.Handler.HandleRelay(message, writer)
-		} else if mt == websocket.CloseMessage {
+			msg, err := relay.Unpack(data, s.Password)
+			if err != nil {
+				log.Println("unpack error:", err)
+				return
+			}
+			handler.HandleRelay(msg, writer)
+		} else {
+			log.Println("unexpected message type:", mt)
+			writer <- nil
 			break
 		}
 	}

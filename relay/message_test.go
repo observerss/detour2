@@ -11,7 +11,7 @@ func Test_MESSAGE(t *testing.T) {
 	id, _ := uuid.NewUUID()
 	msg := &RelayMessage{
 		Pair: &ConnPair{ClientId: id, ConnId: id},
-		Data: &RelayData{CMD: CONNECT, Network: "abcd", Address: "efgh"},
+		Data: &RelayData{CMD: CONNECT, Network: "abcd", Address: "efgh", Data: []byte{1, 5, 100, 3, 23, 172, 184}},
 	}
 
 	password := "password"
@@ -20,6 +20,7 @@ func Test_MESSAGE(t *testing.T) {
 	fmt.Println(data)
 
 	msg2, _ := Unpack(data, password)
+	fmt.Println(msg2)
 
 	if msg2.Data.CMD != CONNECT || msg2.Data.Network != "abcd" || msg2.Data.Address != "efgh" {
 		t.Error("not match")

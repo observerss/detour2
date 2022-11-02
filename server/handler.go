@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -21,17 +22,12 @@ func NewHandler(server *Server) *Handler {
 	return &Handler{Tracker: NewTracker(), Server: server}
 }
 
-func (h *Handler) HandleRelay(data []byte, writer chan *relay.RelayMessage) {
-	msg, err := relay.Unpack(data, h.Server.Password)
-	if err != nil {
-		log.Println("unpack error:", err)
-		return
-	}
+func (h *Handler) HandleRelay(msg *relay.RelayMessage, writer chan *relay.RelayMessage) {
 	switch msg.Data.CMD {
 	case relay.CONNECT:
-		go h.handleConnect(msg, writer)
+		h.handleConnect(msg, writer)
 	case relay.DATA:
-		go h.handleData(msg, writer)
+		h.handleData(msg, writer)
 	default:
 		log.Println("cmd not supported:", msg.Data.CMD)
 		writer <- nil
@@ -46,7 +42,6 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 	if err != nil {
 		log.Println("connect error:", err)
 		writer <- newErrorMessage(msg, err)
-		writer <- nil
 		return
 	}
 
@@ -56,6 +51,11 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 	// connect success, update tracker
 	h.Tracker.Upsert(msg.Pair, conn)
 
+	// pull data from remote => local
+	go h.runPuller(msg, conn, writer)
+}
+
+func (h *Handler) runPuller(msg *relay.RelayMessage, conn *relay.ConnInfo, writer chan *relay.RelayMessage) {
 	defer func() {
 		log.Println("stopped pulling:", conn.Address)
 		// h.Tracker.Remove(msg.Pair)
@@ -64,16 +64,16 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 		}
 	}()
 
-	// start pulling (remote => local)
 	buf := make([]byte, DOWNSTREAM_BUFSIZE)
 	log.Println("start pulling:", conn.Address)
 
-	// a foreground for loop to process
 	for {
-		conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
+		// conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
 		nr, err := conn.RemoteConn.Read(buf)
 		if err != nil && err != io.EOF {
-			log.Println("pull remote error:", err)
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Println("pull remote error:", err)
+			}
 			break
 		}
 

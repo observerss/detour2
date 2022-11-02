@@ -143,9 +143,10 @@ func (c *Client) ConnectRemote(remoteConn *RemoteConn) error {
 
 	conn, _, err := dailer.Dial(remoteConn.Url, nil)
 	if err != nil {
-		c.CanConnect[remoteConn.Url] = false
-		go c.RetryUrl(remoteConn.Url)
-		return errors.New(err.Error() + ", url=" + remoteConn.Url)
+		log.Fatal(err.Error())
+		// c.CanConnect[remoteConn.Url] = false
+		// go c.RetryUrl(remoteConn.Url)
+		// return errors.New(err.Error() + ", url=" + remoteConn.Url)
 	}
 
 	c.CanConnect[remoteConn.Url] = true
@@ -218,7 +219,7 @@ func (c *Client) RemoteReader(conn *RemoteConn) {
 	}()
 
 	for {
-		log.Println("reader waiting for", conn.Url, &conn.Conn)
+		log.Println("reader waiting")
 
 		if !conn.Connected {
 			log.Println("reader wait for connect...")
@@ -270,7 +271,7 @@ func (c *Client) RemoteWriter(conn *RemoteConn) {
 	}()
 
 	for {
-		log.Println("writer waiting for", conn.Url, &conn.Conn)
+		log.Println("writer waiting")
 
 		if !conn.Connected {
 			log.Println("writer wait for connect...", conn.Url)

@@ -52,7 +52,7 @@ func PackData(data *RelayData) []byte {
 	res = binary.BigEndian.AppendUint16(res, uint16(len(msg)))
 	res = append(res, msg...)
 
-	res = binary.BigEndian.AppendUint16(res, uint16(len(data.Data)))
+	res = binary.BigEndian.AppendUint32(res, uint32(len(data.Data)))
 	res = append(res, data.Data...)
 
 	// data2 := UnpackData(res)
@@ -87,8 +87,8 @@ func UnpackData(input []byte) *RelayData {
 	data.Address = string(input[:length])
 	input = input[length:]
 
-	length = int(binary.BigEndian.Uint16(input[:2]))
-	input = input[2:]
+	length = int(binary.BigEndian.Uint32(input[:4]))
+	input = input[4:]
 	data.Data = []byte(input[:length])
 
 	return &data

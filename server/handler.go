@@ -77,7 +77,7 @@ func (h *Handler) runPuller(msg *relay.RelayMessage, conn *relay.ConnInfo, write
 			break
 		}
 
-		writer <- newDataMessage(msg, buf[0:nr])
+		writer <- newDataMessage(msg, append([]byte{}, buf[0:nr]...))
 		log.Println("remote => local data:", nr)
 		if nr == 0 {
 			log.Println("return on 0")

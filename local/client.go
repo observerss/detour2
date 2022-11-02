@@ -103,7 +103,6 @@ func (c *Client) GetConn(cp *relay.ConnPair) (*RemoteConn, error) {
 	if !ok {
 		remoteConn.ReadChannels[cp.ConnId] = make(chan *relay.RelayData)
 	}
-
 	// switch connection if TIME_TO_LIVE has passed
 	// if time.Since(remoteConn.CreatedAt) > TIME_TO_LIVE && !remoteConn.Switching {
 	// 	remoteConn.Switching = true
@@ -325,13 +324,13 @@ func (c *Client) Connect(cp *relay.ConnPair, remote *Remote) (*ConnByPair, error
 }
 
 func (c *ConnByPair) Read(buf []byte) (int, error) {
-	ch, ok := c.Conn.ReadChannels[c.Pair.ConnId]
+	chr, ok := c.Conn.ReadChannels[c.Pair.ConnId]
 	if !ok {
 		return 0, errors.New("reader already closed" + c.Pair.ConnId.String()[:8])
 	}
 
 	log.Println("block on read", c.Pair.ConnId.String()[:8])
-	data := <-ch
+	data := <-chr
 
 	if data == nil {
 		log.Println("go nil read", c.Pair.ConnId.String()[:8])
@@ -371,7 +370,7 @@ func (c *ConnByPair) WriteConnect(network string, address string) {
 
 func (c *ConnByPair) Write(data []byte) (int, error) {
 	log.Println("write to", c.Pair.ConnId.String()[:8], len(data))
-	c.Conn.WriteChan <- &WriteData{ConnId: c.Pair.ConnId, Data: &relay.RelayData{CMD: relay.DATA, Data: data}}
+	c.Conn.WriteChan <- &WriteData{ConnId: c.Pair.ConnId, Data: &relay.RelayData{CMD: relay.DATA, Data: append([]byte{}, data...)}}
 	return len(data), nil
 }
 

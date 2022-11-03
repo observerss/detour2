@@ -30,10 +30,6 @@ func Itob(n byte) bool {
 }
 
 func PackData(data *RelayData) []byte {
-	// buf := bytes.Buffer{}
-	// encoder := gob.NewEncoder(&buf)
-	// encoder.Encode(data)
-	// out := buf.Bytes()
 	res := make([]byte, 0)
 
 	res = append(res, byte(data.CMD))
@@ -55,13 +51,6 @@ func PackData(data *RelayData) []byte {
 	res = binary.BigEndian.AppendUint32(res, uint32(len(data.Data)))
 	res = append(res, data.Data...)
 
-	// data2 := UnpackData(res)
-	// if string(data.Data) != string(data2.Data) {
-	// 	go func() {
-	// 		time.Sleep(time.Millisecond * 100)
-	// 		log.Fatal("data not match", data.Data[:100], data2.Data[:100])
-	// 	}()
-	// }
 	return res
 }
 

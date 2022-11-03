@@ -3,6 +3,7 @@ package server
 import (
 	"detour/relay"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,11 +13,14 @@ const ALIVE_TIMEOUT = 60
 
 type Tracker struct {
 	Clients map[uuid.UUID]*relay.ClientInfo `json:"clients,omitempty" comment:"clientid => clientinfo"`
+	Lock    sync.Mutex
 }
 
 // Upsert ConnPair Info
 // Note that a ConnPair can be already exists in Tracker
 func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) *relay.ClientInfo {
+	t.Lock.Lock()
+	defer t.Lock.Unlock()
 	client, ok := t.Clients[cp.ClientId]
 	if !ok {
 		conns := make(map[uuid.UUID]*relay.ConnInfo)
@@ -33,13 +37,15 @@ func (t *Tracker) Upsert(cp *relay.ConnPair, conn *relay.ConnInfo) *relay.Client
 			close(oldconn.Quit)
 		}
 		client.Conns[cp.ConnId] = conn
-		client.Activity = time.Now().UnixMilli()
 	}
+	client.Activity = time.Now().UnixMilli()
 	return client
 }
 
 // Find ConnInfo by ConnPair
 func (t *Tracker) Find(cp *relay.ConnPair) *relay.ConnInfo {
+	t.Lock.Lock()
+	defer t.Lock.Unlock()
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		conn, ok := client.Conns[cp.ConnId]
@@ -51,6 +57,8 @@ func (t *Tracker) Find(cp *relay.ConnPair) *relay.ConnInfo {
 }
 
 func (t *Tracker) Remove(cp *relay.ConnPair) {
+	t.Lock.Lock()
+	defer t.Lock.Unlock()
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		delete(client.Conns, cp.ConnId)
@@ -61,6 +69,8 @@ func (t *Tracker) Remove(cp *relay.ConnPair) {
 }
 
 func (t *Tracker) ImAlive(cp *relay.ConnPair) {
+	t.Lock.Lock()
+	defer t.Lock.Unlock()
 	client, ok := t.Clients[cp.ClientId]
 	if ok {
 		client.Activity = time.Now().UnixMilli()
@@ -74,6 +84,8 @@ func (t *Tracker) ImAlive(cp *relay.ConnPair) {
 // Housekeep the tracker
 // this usually doesn't make much sense, unless a leak happened
 func (t *Tracker) RunHouseKeeper() {
+	t.Lock.Lock()
+	defer t.Lock.Unlock()
 	now := time.Now().UnixMilli()
 	totalClients := 0
 	totalConns := 0
@@ -87,7 +99,6 @@ func (t *Tracker) RunHouseKeeper() {
 			totalConns += 1
 			if now-conn.Activity > 1000*ALIVE_TIMEOUT {
 				removedConns += 1
-				// close(conn.Quit)
 				connids = append(connids, connid)
 			}
 		}
@@ -95,6 +106,7 @@ func (t *Tracker) RunHouseKeeper() {
 			delete(client.Conns, connid)
 		}
 		if len(client.Conns) == 0 {
+			client.Quit <- nil
 			removedClients += 1
 			clientids = append(clientids, clientid)
 		}

@@ -13,13 +13,15 @@ const DOWNSTREAM_BUFSIZE = 32 * 1024
 const CONNECT_TIMEOUT = 3
 const READWRITE_TIMEOUT = 60
 
+var TRACKER = NewTracker()
+
 type Handler struct {
 	Tracker *Tracker
 	Server  *Server
 }
 
 func NewHandler(server *Server) *Handler {
-	return &Handler{Tracker: NewTracker(), Server: server}
+	return &Handler{Tracker: TRACKER, Server: server}
 }
 
 func (h *Handler) HandleRelay(msg *relay.RelayMessage, writer chan *relay.RelayMessage) {
@@ -58,7 +60,7 @@ func (h *Handler) handleConnect(msg *relay.RelayMessage, writer chan *relay.Rela
 func (h *Handler) runPuller(msg *relay.RelayMessage, conn *relay.ConnInfo, writer chan *relay.RelayMessage) {
 	defer func() {
 		log.Println("stopped pulling:", conn.Address)
-		// h.Tracker.Remove(msg.Pair)
+		h.Tracker.Remove(msg.Pair)
 		if conn.RemoteConn != nil {
 			conn.RemoteConn.Close()
 		}
@@ -68,10 +70,10 @@ func (h *Handler) runPuller(msg *relay.RelayMessage, conn *relay.ConnInfo, write
 	log.Println("start pulling:", conn.Address)
 
 	for {
-		// conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
+		conn.RemoteConn.SetReadDeadline(time.Now().Add(time.Second * READWRITE_TIMEOUT))
 		nr, err := conn.RemoteConn.Read(buf)
 		if err != nil && err != io.EOF {
-			if !strings.Contains(err.Error(), "use of closed network connection") {
+			if !strings.Contains(err.Error(), "use of closed network connection") && !strings.Contains(err.Error(), "timeout") {
 				log.Println("pull remote error:", err)
 			}
 			break
@@ -84,7 +86,7 @@ func (h *Handler) runPuller(msg *relay.RelayMessage, conn *relay.ConnInfo, write
 			break
 		}
 		// keep alive
-		// h.Tracker.ImAlive(msg.Pair)
+		h.Tracker.ImAlive(msg.Pair)
 	}
 }
 
@@ -129,13 +131,6 @@ func createConnection(req *relay.RelayData, writer chan *relay.RelayMessage) (*r
 		Writer:     writer,
 	}, nil
 }
-
-// func (h *Handler) writeMessage(c *websocket.Conn, msg *relay.RelayMessage) error {
-// 	// log.Println("write:", msg.Data)
-// 	lock.Lock()
-// 	defer lock.Unlock()
-// 	return c.WriteMessage(websocket.BinaryMessage, relay.Pack(msg, h.Server.Password))
-// }
 
 func newErrorMessage(msg *relay.RelayMessage, err error) *relay.RelayMessage {
 	return &relay.RelayMessage{

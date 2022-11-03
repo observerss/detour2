@@ -46,26 +46,27 @@ func NewHandler(proto string, conn net.Conn, client *Client, quit chan struct{})
 		return nil, errors.New("proto not supported: " + proto)
 	}
 	connid, _ := uuid.NewRandom()
-	log.Println("new handler: ", connid)
 	handler.Pair = &relay.ConnPair{ClientId: CLIENTID, ConnId: connid}
 	handler.Stop = make(chan interface{})
 	return handler, nil
 }
 
 func (h *Handler) HandleConn() {
-	log.Println("handle start.")
+	log.Println("handle init.")
 	remote := h.Protocol.Init()
 	if remote == nil {
 		h.Conn.Close()
 		return
 	}
 
+	log.Println("handle init ok")
+
 	connByPair, err := h.Client.Connect(h.Pair, remote)
-	log.Println("connect ok")
+	log.Println("handle connect ok")
 
 	err = h.Protocol.Bind(err)
 	if err != nil {
-		log.Println("connect error:", err)
+		log.Println("handle bind error:", err)
 		h.Conn.Close()
 		connByPair.Close()
 		return

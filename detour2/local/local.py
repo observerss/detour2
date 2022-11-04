@@ -7,7 +7,7 @@ from typing import Dict
 from websockets.exceptions import ConnectionClosed
 from websockets.client import connect, WebSocketClientProtocol
 
-from .socks5 import init, send_addr, Address, AddrType
+from .socks5 import init, send_addr, Socks5Request
 from ..schema import Message
 
 
@@ -57,15 +57,25 @@ async def handle_socks5(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         return
 
     asyncio.create_task(copy_remote_to_local(queue, writer))
+    asyncio.create_task(copy_local_to_remote(reader, writer, remote, cid, req))
 
-    print(cid, "handle, start forward local to websocket")
+
+async def copy_local_to_remote(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    remote: WebSocketClientProtocol,
+    cid: str,
+    req: Socks5Request,
+):
+    print(cid, "copy-to-remote, start forward local to websocket")
     # local to remote
     while True:
         try:
+            handle_can_switch = True
             data = await reader.read(16384)
-            print(cid, "handle, read <=== local", len(data))
+            print(cid, "copy-to-remote, read <=== local", len(data))
         except ConnectionAbortedError:
-            print(cid, "handle, connection abort")
+            print(cid, "copy-to-remote, connection abort")
             break
         except:
             traceback.print_exc()
@@ -76,10 +86,10 @@ async def handle_socks5(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             msg.cmd = "close"
 
         try:
-            print(cid, "handle, send ===> websocket", msg.cmd, len(msg.data))
+            print(cid, "copy-to-remote, send ===> websocket", msg.cmd, len(msg.data))
             await remote.send(pickle.dumps(msg))
         except ConnectionClosed:
-            print(cid, "handle, connection closed")
+            print(cid, "copy-to-remote, connection closed")
             break
         except:
             traceback.print_exc()
@@ -89,7 +99,7 @@ async def handle_socks5(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             break
 
     writer.close()
-    print(cid, "handle quit")
+    print(cid, "copy-to-remote quit")
 
 
 async def run_remote():
@@ -127,10 +137,10 @@ async def run_remote():
 
 
 async def copy_remote_to_local(queue: asyncio.Queue, writer: asyncio.StreamWriter):
-    print(queue.cid, "copy, start")
+    print(queue.cid, "copy-from-remote, start")
     while True:
         msg: Message = await queue.get()
-        print(queue.cid, "copy, get <=== queue", msg.cmd, len(msg.data))
+        print(queue.cid, "copy-from-remote, get <=== queue", msg.cmd, len(msg.data))
         if msg.cmd == "close":
             queues.pop(queue.cid, None)
             writer.close()

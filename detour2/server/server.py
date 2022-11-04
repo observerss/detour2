@@ -9,7 +9,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..schema import Message
 
-
+conns: Dict[str, WebSocketServerProtocol] = {}
 writers: Dict[str, asyncio.StreamWriter] = {}
 
 
@@ -33,6 +33,14 @@ async def handle(conn: WebSocketServerProtocol):
                 await handle_data(conn, msg)
             elif msg.cmd == "close":
                 await handle_close(conn, msg)
+            elif msg.cmd == "switch":
+                print("ws, update current conn")
+                count = 0
+                for key in list(conns):
+                    if conns[key] != conn:
+                        conns[key] = conn
+                        count += 1
+                print("ws, updated", count, "conn")
             else:
                 print("handle,", msg.cmd, "not implemented")
         except ConnectionClosed:
@@ -59,6 +67,7 @@ async def handle_connect(conn: WebSocketServerProtocol, msg: Message):
 
     print(cid, "connect, send ok")
     writers[cid] = writer
+    conns[cid] = conn
     msg.ok = True
     if not await send_websocket_safe(conn, msg):
         return
@@ -94,7 +103,7 @@ async def loop(
             if len(data) == 0:
                 cmd = "close"
             msg = Message(cmd=cmd, cid=cid, data=data, host=msg.host, port=msg.port)
-            print(cid, "loop, send ===> websocket", cmd, len(data))
+            conn = conns.get(cid) or conn
             await send_websocket_safe(conn, msg)
 
         if cmd == "close":
@@ -124,6 +133,7 @@ async def handle_data(conn: WebSocketServerProtocol, msg: Message):
         print("data,", msg.cid, "not found")
 
         print(cid, "reconnect, open connection", msg.host, msg.port)
+        conns[cid] = conn
         try:
             reader, writer = await asyncio.open_connection(msg.host, msg.port)
         except Exception as e:
@@ -151,7 +161,7 @@ async def handle_close(conn: WebSocketServerProtocol, msg: Message):
 
 async def send_websocket_safe(conn: WebSocketServerProtocol, msg: Message) -> bool:
     try:
-        conn
+        print(msg.cid, "send ===> websocket", msg.cmd, len(msg.data))
         await conn.send(pickle.dumps(msg))
     except ConnectionClosed:
         return False

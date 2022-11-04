@@ -35,9 +35,19 @@ async def handle_socks5(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         return
 
     print(cid, "handle, send connect")
-    await remote.send(
-        pickle.dumps(Message(cmd="connect", cid=cid, host=req.addr, port=req.port))
-    )
+    cdata = pickle.dumps(Message(cmd="connect", cid=cid, host=req.addr, port=req.port))
+    try:
+        await remote.send(cdata)
+    except:
+        try:
+            remote = await connect("ws://127.0.0.1:3811", ping_interval=None)
+        except:
+            print("hanlde, cannot connect to ws")
+            writer.close()
+            return
+        else:
+            await remote.send(cdata)
+
     msg: Message = await queue.get()
     await send_addr(msg.ok, writer)
     if not msg.ok:
@@ -96,13 +106,15 @@ async def run_remote():
         ):
             break
         except (AttributeError, ConnectionClosed):
-            print("ws, reconnect")
-            try:
-                remote = await connect("ws://127.0.0.1:3811")
-            except ConnectionRefusedError:
-                pass
+            # print("ws, disconneted")
+            await asyncio.sleep(0.5)
+            # try:
+            #     remote = await connect("ws://127.0.0.1:3811", ping_interval=None)
+            # except ConnectionRefusedError:
+            #     pass
             continue
         except:
+            await asyncio.sleep(0.5)
             traceback.print_exc()
             continue
 
@@ -129,8 +141,11 @@ async def copy_remote_to_local(queue: asyncio.Queue, writer: asyncio.StreamWrite
                 break
             try:
                 await writer.drain()
+            except ConnectionResetError:
+                break
             except:
                 traceback.print_exc()
+                break
     print(queue.cid, "copy, quit")
 
 

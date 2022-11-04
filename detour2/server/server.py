@@ -66,15 +66,18 @@ async def handle_connect(conn: WebSocketServerProtocol, msg: Message):
         traceback.print_exc()
         return
 
-    #     await asyncio.create_task(loop(conn, msg, reader, writer))
+    asyncio.create_task(loop(conn, msg, reader, writer))
+    print(cid, "connect done")
 
-    # async def loop(
-    #     conn: WebSocketServerProtocol,
-    #     msg: Message,
-    #     reader: asyncio.StreamReader,
-    #     writer: asyncio.StreamWriter,
-    # ):
-    #     cid = msg.cid
+
+async def loop(
+    conn: WebSocketServerProtocol,
+    msg: Message,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+):
+    cid = msg.cid
+
     print(cid, "loop, start")
     while True:
         cmd = "data"

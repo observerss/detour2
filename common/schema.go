@@ -1,7 +1,16 @@
-package relay
+package common
+
+type CMD int
+
+const (
+	CONNECT CMD = iota
+	DATA
+	CLOSE
+	SWITCH
+)
 
 type Message struct {
-	Cmd     string
+	Cmd     CMD
 	Cid     string
 	Ok      bool
 	Msg     string

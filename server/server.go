@@ -22,21 +22,19 @@ var upgrader = websocket.Upgrader{}
 
 type Server struct {
 	Address   string
-	Conns     sync.Map                // Cid => Conn
-	WSCounter map[*websocket.Conn]int // WSconn => num of NetConns
+	Packer    *common.Packer
+	Conns     sync.Map       // Cid => Conn
+	WSCounter map[string]int // Wid => num of NetConns
 }
 
 type Conn struct {
-	Cid     string
+	Wid     string // wsid
+	Cid     string // connid
 	Network string
 	Address string
 	WSConn  *websocket.Conn
 	NetConn net.Conn
 	WSLock  *sync.Mutex
-}
-
-type Lock struct {
-	WSLock sync.Mutex
 }
 
 type Handle struct {
@@ -45,10 +43,11 @@ type Handle struct {
 	Msg    *common.Message
 }
 
-func NewServer(listen string) *Server {
-	vals := strings.Split(listen, "://")
+func NewServer(sconf *common.ServerConfig) *Server {
+	vals := strings.Split(sconf.Listen, "://")
 	server := &Server{
 		Address: vals[1],
+		Packer:  &common.Packer{Password: sconf.Password},
 	}
 	return server
 }
@@ -125,7 +124,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		msg, err := common.Unpack(data)
+		msg, err := s.Packer.Unpack(data)
 		if err != nil {
 			log.Println("ws, unpack error", err)
 			return
@@ -159,6 +158,7 @@ func (s *Server) HandleConnect(handle *Handle) {
 	cid := msg.Cid
 	conn := Conn{
 		Cid:     cid,
+		Wid:     msg.Wid,
 		Network: msg.Network,
 		Address: msg.Address,
 		WSConn:  handle.WSConn,
@@ -198,18 +198,18 @@ func (s *Server) RunLoop(conn *Conn) {
 
 		// recalculate wscounter
 		conn.WSLock.Lock()
-		n, ok := s.WSCounter[conn.WSConn]
+		n, ok := s.WSCounter[conn.Wid]
 		if ok {
 			n -= 1
 			if n == 0 {
-				delete(s.WSCounter, conn.WSConn)
+				delete(s.WSCounter, conn.Wid)
 
 				// if no clients on on current wsconn, close it
 				log.Println("!!!! close websocket now")
 				conn.WSConn.Close()
 			} else {
-				log.Println(conn.WSConn, "current num of NetConns", n)
-				s.WSCounter[conn.WSConn] = n
+				log.Println(conn.Wid, "current num of NetConns", n)
+				s.WSCounter[conn.Wid] = n
 			}
 		}
 		conn.WSLock.Unlock()
@@ -217,12 +217,12 @@ func (s *Server) RunLoop(conn *Conn) {
 
 	// calculate wscounter
 	conn.WSLock.Lock()
-	n, ok := s.WSCounter[conn.WSConn]
+	n, ok := s.WSCounter[conn.Wid]
 	if !ok {
 		n = 0
 	}
 	n += 1
-	s.WSCounter[conn.WSConn] = n
+	s.WSCounter[conn.Wid] = n
 	log.Println(conn.WSConn, "current num of NetConns", n)
 	conn.WSLock.Unlock()
 
@@ -245,6 +245,7 @@ func (s *Server) RunLoop(conn *Conn) {
 		msg := &common.Message{
 			Cmd:     cmd,
 			Cid:     conn.Cid,
+			Wid:     conn.Wid,
 			Data:    data,
 			Network: conn.Network,
 			Address: conn.Address,
@@ -264,6 +265,7 @@ func (s *Server) HandleData(handle *Handle) {
 	cmsg := &common.Message{
 		Cmd:     common.CLOSE,
 		Cid:     cid,
+		Wid:     msg.Wid,
 		Network: msg.Network,
 		Address: msg.Address,
 	}
@@ -277,6 +279,7 @@ func (s *Server) HandleData(handle *Handle) {
 		remote, err := dialer.Dial(msg.Network, msg.Address)
 		conn = &Conn{
 			Cid:     cid,
+			Wid:     msg.Wid,
 			WSLock:  &sync.Mutex{},
 			WSConn:  handle.WSConn,
 			NetConn: remote,
@@ -319,7 +322,7 @@ func (s *Server) HandleSwitch(handle *Handle) {
 	s.Conns.Range(func(key, value any) bool {
 		total += 1
 		sconn := value.(*Conn)
-		if key.(string) == cid && conn != sconn.WSConn {
+		if sconn.Wid == msg.Wid && conn != sconn.WSConn {
 			sconn.WSLock.Lock()
 			sconn.WSConn = conn
 			sconn.WSLock.Unlock()
@@ -333,7 +336,7 @@ func (s *Server) HandleSwitch(handle *Handle) {
 func (s *Server) SendWebosket(conn *Conn, msg *common.Message) error {
 	conn.WSLock.Lock()
 	defer conn.WSLock.Unlock()
-	data, err := common.Pack(msg)
+	data, err := s.Packer.Pack(msg)
 	if err != nil {
 		return err
 	}

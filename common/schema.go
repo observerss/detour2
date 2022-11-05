@@ -11,6 +11,7 @@ const (
 
 type Message struct {
 	Cmd     CMD
+	Wid     string
 	Cid     string
 	Ok      bool
 	Msg     string
@@ -25,11 +26,14 @@ type Package struct {
 	Message *Message
 }
 
-// class Message:
-//     cmd: str  # connect/data/close
-//     cid: str = ""
-//     ok: bool = True
-//     msg: str = ""
-//     host: str = ""
-//     port: int = 0
-//     data: bytes = b""
+type LocalConfig struct {
+	Listen   string `json:"listen" example:"tcp://0.0.0.0:3810"`
+	Remotes  string `json:"remotes" example:"ws://127.0.0.1:3811/ws,ws://127.0.0.1:3811/ws"`
+	Password string `json:"password" example:"pass123"`
+	Proto    string `json:"proto" example:"socks5"`
+}
+
+type ServerConfig struct {
+	Listen   string `json:"listen" example:"tcp://0.0.0.0:3811"`
+	Password string `json:"password" example:"pass123"`
+}

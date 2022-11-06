@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	TIME_TO_LIVE       = 56 // sec
-	RECONNECT_INTERVAL = 5  // sec
-	FLUSH_TIMEOUT      = 50 // ms
+	TIME_TO_LIVE       = 1056 // sec
+	RECONNECT_INTERVAL = 1    // sec
+	FLUSH_TIMEOUT      = 50   // ms
 )
 
 type WSConn struct {
@@ -26,6 +26,7 @@ type WSConn struct {
 	Connected  bool
 	WSConn     *websocket.Conn
 	WriteLock  sync.Mutex
+	RWLock     sync.RWMutex
 	Packer     *common.Packer
 	Local      *Local
 }
@@ -82,11 +83,17 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 }
 
 func Connect(wsconn *WSConn, force bool) error {
+	wsconn.RWLock.RLock()
 	if !wsconn.CanConnect && !force {
+		wsconn.RWLock.Unlock()
 		return errors.New("can not connect")
 	}
+	wsconn.RWLock.RUnlock()
+
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second * 3}
 	conn, _, err := dialer.Dial(wsconn.Url, nil)
+
+	wsconn.RWLock.Lock()
 	if err != nil {
 		wsconn.CanConnect = false
 		wsconn.Connected = false
@@ -96,6 +103,8 @@ func Connect(wsconn *WSConn, force bool) error {
 	wsconn.Connected = true
 	wsconn.CanConnect = true
 	wsconn.WSConn = conn
+	wsconn.RWLock.Unlock()
+
 	return nil
 }
 
@@ -197,10 +206,12 @@ func (ws *WSConn) WriteMessage(msg *common.Message) error {
 	}
 	ws.WriteLock.Lock()
 	err = ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
+	ws.RWLock.Lock()
 	if err != nil {
 		ws.Connected = false
 		ws.CanConnect = false
 	}
+	ws.RWLock.Unlock()
 	ws.WriteLock.Unlock()
 	return err
 }

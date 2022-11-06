@@ -91,7 +91,7 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 	case ADDR_DOMAIN:
 		length := buf[4]
 		network = "tcp"
-		address = fmt.Sprintf("%v:%v", buf[5:5+length], binary.BigEndian.Uint16(buf[5+length:7+length]))
+		address = fmt.Sprintf("%v:%v", string(buf[5:5+length]), binary.BigEndian.Uint16(buf[5+length:7+length]))
 	case ADDR_IPV6:
 		network = "tcp6"
 		address = fmt.Sprintf("%v:%v", net.IP(buf[4:20]), binary.BigEndian.Uint16(buf[20:22]))

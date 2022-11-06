@@ -24,6 +24,8 @@ type Conn struct {
 	Cid     string
 	Wid     string
 	Quit    chan interface{}
+	Network string
+	Address string
 	MsgChan chan *common.Message
 	NetConn net.Conn
 	WSConn  *WSConn
@@ -123,6 +125,8 @@ func (l *Local) HandleConn(netconn net.Conn) {
 		Cid:     cid,
 		MsgChan: make(chan *common.Message, 32),
 		Quit:    make(chan interface{}),
+		Network: msg.Network,
+		Address: msg.Address,
 		NetConn: netconn,
 		WSConn:  wsconn,
 	}
@@ -134,7 +138,7 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	case msg = <-conn.MsgChan:
 	}
 
-	log.Println(cid, "handle, send ack")
+	log.Println(cid, "handle, send ack", msg.Ok, msg.Network, msg.Address)
 	err = l.Proto.Ack(netconn, msg.Ok, msg.Msg)
 	if err != nil {
 		log.Println(cid, "handle, ack error", err)
@@ -178,6 +182,7 @@ func (l *Local) CopyFromWS(conn *Conn) {
 				log.Println(conn.Cid, "copy-from-ws, close by '0' data")
 				return
 			}
+			log.Println(conn.Cid, "copy-from-ws, written ===> local", nw)
 		}
 	}
 }
@@ -202,20 +207,22 @@ func (l *Local) CopyToWS(conn *Conn) {
 			Cmd:     common.DATA,
 			Wid:     conn.Wid,
 			Cid:     conn.Cid,
-			Network: l.Network,
-			Address: l.Address,
+			Network: conn.Network,
+			Address: conn.Address,
 			Data:    append([]byte{}, buf[:nr]...),
 		}
 		if nr == 0 {
 			msg.Cmd = common.CLOSE
 		}
 
-		log.Println(conn.Cid, "copy-to-ws, send ===> ws", msg.Cmd, len(msg.Data))
+		log.Println(conn.Cid, "copy-to-ws, read <=== local", msg.Cmd, len(msg.Data))
 		err = conn.WSConn.WriteMessage(msg)
 		if err != nil {
 			log.Println(conn.Cid, "copy-to-ws, write error", err)
 			return
 		}
+
+		log.Println(conn.Cid, "copy-to-ws, sent ===> ws", nr)
 
 		if nr == 0 {
 			log.Println(conn.Cid, "copy-to-ws, close by '0' data")

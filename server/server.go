@@ -19,6 +19,7 @@ import (
 const (
 	BUFFER_SIZE  = 16 * 1024
 	READ_TIMEOUT = 60
+	DIAL_TIMEOUT = 3
 )
 
 var upgrader = websocket.Upgrader{}
@@ -172,7 +173,7 @@ func (s *Server) HandleConnect(handle *Handle) {
 
 	log.Println(cid, "connect, open connection", msg.Network, msg.Address)
 
-	dialer := net.Dialer{Timeout: time.Second * 3}
+	dialer := net.Dialer{Timeout: time.Second * DIAL_TIMEOUT}
 
 	remote, err := dialer.Dial(msg.Network, msg.Address)
 	if err != nil {
@@ -280,12 +281,12 @@ func (s *Server) HandleData(handle *Handle) {
 	if !ok {
 		log.Println("data,", cid, "not found")
 		log.Println(cid, "reconnect, open connection", msg.Network, msg.Address)
-		dialer := net.Dialer{Timeout: time.Second * 3}
+		dialer := net.Dialer{Timeout: time.Second * DIAL_TIMEOUT}
 		remote, err := dialer.Dial(msg.Network, msg.Address)
 		conn = &Conn{
 			Cid:     cid,
 			Wid:     msg.Wid,
-			WSLock:  &sync.Mutex{},
+			WSLock:  handle.WSLock,
 			WSConn:  handle.WSConn,
 			NetConn: remote,
 			Network: msg.Network,

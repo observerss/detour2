@@ -124,6 +124,7 @@ func (ws *WSConn) WebsocketPuller() error {
 
 	log.Println(ws.Wid, "ws, start")
 	for {
+		// FIXIT: this will keep server running, not we want
 		// try connect if not connected
 		if !ws.Connected {
 			log.Println(ws.Wid, "ws, wait for reconnect")

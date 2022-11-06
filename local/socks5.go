@@ -35,7 +35,7 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 		}
 	}()
 
-	buf := make([]byte, BUFSIZE)
+	buf := make([]byte, BUFFER_SIZE)
 
 	nr, err := conn.Read(buf)
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 		return nil, errors.New("unknown addr type")
 	}
 
-	return &Request{Network: network, Address: address}, errors.New("not implemented")
+	return &Request{Network: network, Address: address}, nil
 }
 
 func (s *Socks5Proto) Ack(conn net.Conn, ok bool, msg string) error {

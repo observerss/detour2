@@ -16,7 +16,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const BUFZIE = 16 * 1024
+const (
+	BUFFER_SIZE  = 16 * 1024
+	READ_TIMEOUT = 60
+)
 
 var upgrader = websocket.Upgrader{}
 
@@ -46,8 +49,9 @@ type Handle struct {
 func NewServer(sconf *common.ServerConfig) *Server {
 	vals := strings.Split(sconf.Listen, "://")
 	server := &Server{
-		Address: vals[1],
-		Packer:  &common.Packer{Password: sconf.Password},
+		Address:   vals[1],
+		Packer:    &common.Packer{Password: sconf.Password},
+		WSCounter: make(map[string]int),
 	}
 	return server
 }
@@ -114,6 +118,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		log.Println("ws, wait read")
+		// conn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("ws, ignore message type", mt)
@@ -190,6 +195,7 @@ func (s *Server) HandleConnect(handle *Handle) {
 }
 
 func (s *Server) RunLoop(conn *Conn) {
+	// TODO: debug this, the loop is broken
 	log.Println(conn.Cid, "loop, start")
 	defer func() {
 		log.Println(conn.Cid, "loop, quit")
@@ -223,14 +229,13 @@ func (s *Server) RunLoop(conn *Conn) {
 	}
 	n += 1
 	s.WSCounter[conn.Wid] = n
-	log.Println(conn.WSConn, "current num of NetConns", n)
 	conn.WSLock.Unlock()
 
-	buf := make([]byte, BUFZIE)
+	buf := make([]byte, BUFFER_SIZE)
 	for {
 		log.Println(conn.Cid, "loop, wait read")
 
-		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * 60))
+		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
 			log.Println(conn.Cid, "loop, read error", err)
@@ -318,7 +323,7 @@ func (s *Server) HandleSwitch(handle *Handle) {
 
 	count := 0
 	total := 0
-	cid := msg.Cid
+	wid := msg.Wid
 	s.Conns.Range(func(key, value any) bool {
 		total += 1
 		sconn := value.(*Conn)
@@ -330,7 +335,7 @@ func (s *Server) HandleSwitch(handle *Handle) {
 		}
 		return true
 	})
-	log.Println(cid, "switched", count, "of", total)
+	log.Println(wid, "switched", count, "of", total)
 }
 
 func (s *Server) SendWebosket(conn *Conn, msg *common.Message) error {

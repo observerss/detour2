@@ -8,7 +8,9 @@ import (
 	"sync"
 )
 
-const BUFSIZE = 16 * 1024
+const (
+	BUFFER_SIZE = 16 * 1024
+)
 
 type Local struct {
 	Network string
@@ -36,6 +38,7 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 		Network: network,
 		Address: address,
 		Packer:  &common.Packer{Password: lconf.Password},
+		WSConns: make(map[string]*WSConn),
 	}
 	switch lconf.Proto {
 	case PROTO_SOCKS5:
@@ -160,7 +163,7 @@ func (l *Local) CopyFromWS(conn *Conn) {
 		case msg = <-conn.MsgChan:
 		}
 
-		log.Println(conn.Cid, "copy-from-ws, get <=== ws", msg.Cmd, len(msg.Data))
+		log.Println(conn.Cid, "copy-from-ws, get <=== queue", msg.Cmd, len(msg.Data))
 		switch msg.Cmd {
 		case common.CLOSE:
 			log.Println(conn.Cid, "copy-from-ws, 'close'")
@@ -187,7 +190,7 @@ func (l *Local) CopyToWS(conn *Conn) {
 		l.Conns.Delete(conn.Cid)
 	}()
 
-	buf := make([]byte, BUFSIZE)
+	buf := make([]byte, BUFFER_SIZE)
 	for {
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {

@@ -3,12 +3,19 @@ package local
 import (
 	"detour/common"
 	"errors"
+	"log"
 	"math/rand"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	TIME_TO_LIVE       = 56 // sec
+	RECONNECT_INTERVAL = 5  // sec
+	FLUSH_TIMEOUT      = 50 // ms
 )
 
 type WSConn struct {
@@ -18,7 +25,6 @@ type WSConn struct {
 	CanConnect bool
 	Connected  bool
 	WSConn     *websocket.Conn
-	ReadLock   sync.Mutex
 	WriteLock  sync.Mutex
 	Packer     *common.Packer
 	Local      *Local
@@ -28,7 +34,7 @@ func NewWSConn(url string, wid string, local *Local) *WSConn {
 	return &WSConn{
 		Url:        strings.TrimSpace(url),
 		Wid:        wid,
-		TimeToLive: 58,
+		TimeToLive: TIME_TO_LIVE,
 		Connected:  false,
 		CanConnect: true,
 		Packer:     local.Packer,
@@ -39,7 +45,7 @@ func NewWSConn(url string, wid string, local *Local) *WSConn {
 // GetWSConn find one usable wsconn
 func (l *Local) GetWSConn() (*WSConn, error) {
 	length := len(l.WSConns)
-	wsconns := make([]*WSConn, length)
+	wsconns := make([]*WSConn, 0, length)
 	for _, w := range l.WSConns {
 		wsconns = append(wsconns, w)
 	}
@@ -49,25 +55,34 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 	}
 
 	for {
+		if Sum(visited) == length {
+			return nil, errors.New("all wsconns are not reachable")
+		}
+
 		idx := rand.Intn(length)
 		if visited[idx] != 0 {
 			continue
 		}
 		wsconn := wsconns[idx]
-		err := Connect(wsconn)
-		if err != nil {
+		if !wsconn.CanConnect {
 			visited[idx] = 1
-			if Sum(visited) == length {
-				return nil, errors.New("all wsconns are not reachable")
-			}
-		} else {
-			return wsconn, nil
+			continue
 		}
+
+		if !wsconn.Connected {
+			err := Connect(wsconn, false)
+			if err != nil {
+				visited[idx] = 1
+				continue
+			}
+		}
+
+		return wsconn, nil
 	}
 }
 
-func Connect(wsconn *WSConn) error {
-	if !wsconn.CanConnect {
+func Connect(wsconn *WSConn, force bool) error {
+	if !wsconn.CanConnect && !force {
 		return errors.New("can not connect")
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second * 3}
@@ -77,7 +92,9 @@ func Connect(wsconn *WSConn) error {
 		wsconn.Connected = false
 		return err
 	}
+	log.Println(wsconn.Wid, "ws, connected")
 	wsconn.Connected = true
+	wsconn.CanConnect = true
 	wsconn.WSConn = conn
 	return nil
 }
@@ -94,8 +111,83 @@ func Sum(visited []byte) int {
 // 1. pull message from websocket, put it to data channel
 // 2. switch to a new transport connection when ttl is reached
 func (ws *WSConn) WebsocketPuller() error {
-	// time.NewTimer(time.Second * time.Duration(wsconn.TimeToLive))
-	return nil
+	var switchTimer *time.Timer
+
+	log.Println(ws.Wid, "ws, start")
+	for {
+		// try connect if not connected
+		if !ws.Connected {
+			log.Println(ws.Wid, "ws, wait for reconnect")
+			time.Sleep(time.Second * RECONNECT_INTERVAL)
+			err := Connect(ws, true)
+			if err != nil {
+				continue
+			}
+			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
+		}
+
+		// switch conn when ttl is reached
+		if switchTimer != nil {
+			select {
+			case <-switchTimer.C:
+				// create new connection
+				log.Println(ws.Wid, "ws, switch start")
+				wsconn := NewWSConn(ws.Url, ws.Wid, ws.Local)
+				err := Connect(wsconn, false)
+				if err != nil {
+					// use old
+					break
+				}
+
+				// send switch cmd
+				err = wsconn.WriteMessage(&common.Message{
+					Wid: ws.Wid,
+					Cmd: common.SWITCH,
+				})
+				if err != nil {
+					// use old
+					break
+				}
+
+				// flush all reads
+				ws.WSConn.SetReadDeadline(time.Now().Add(time.Millisecond * FLUSH_TIMEOUT))
+				for {
+					msg, err := ws.ReadMessage()
+					if err != nil {
+						break
+					}
+					log.Println(ws.Wid, "ws, flush read", msg.Cmd, len(msg.Data))
+					conn, ok := ws.Local.Conns.Load(msg.Cid)
+					if ok {
+						log.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
+						conn.(Conn).MsgChan <- msg
+					}
+				}
+
+				// finally do the switch
+				ws.WriteLock.Lock()
+				ws.WSConn.Close()
+				ws.WSConn = wsconn.WSConn
+				ws.WriteLock.Unlock()
+			default:
+			}
+		}
+
+		// read & put queue
+		log.Println(ws.Wid, "ws, wait read")
+		msg, err := ws.ReadMessage()
+		if err != nil {
+			log.Println(ws.Wid, "ws, read error", err)
+			continue
+		}
+
+		log.Println(ws.Wid, "ws, read", msg.Cmd, len(msg.Data))
+		conn, ok := ws.Local.Conns.Load(msg.Cid)
+		if ok {
+			log.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
+			conn.(*Conn).MsgChan <- msg
+		}
+	}
 }
 
 func (ws *WSConn) WriteMessage(msg *common.Message) error {
@@ -104,6 +196,30 @@ func (ws *WSConn) WriteMessage(msg *common.Message) error {
 		return err
 	}
 	ws.WriteLock.Lock()
-	defer ws.WriteLock.Unlock()
-	return ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
+	err = ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
+	if err != nil {
+		ws.Connected = false
+		ws.CanConnect = false
+	}
+	ws.WriteLock.Unlock()
+	return err
+}
+
+func (ws *WSConn) ReadMessage() (*common.Message, error) {
+	for {
+		mt, data, err := ws.WSConn.ReadMessage()
+		if err != nil {
+			ws.Connected = false
+			ws.CanConnect = false
+			return nil, err
+		}
+		if mt != websocket.BinaryMessage {
+			continue
+		}
+		msg, err := ws.Packer.Unpack(data)
+		if err != nil {
+			return nil, err
+		}
+		return msg, nil
+	}
 }

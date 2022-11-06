@@ -122,7 +122,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		// conn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("ws, ignore message type", mt)
+			log.Println("ws, read error", err)
 			return
 		}
 

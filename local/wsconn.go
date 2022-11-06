@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	TIME_TO_LIVE       = 1056 // sec
-	RECONNECT_INTERVAL = 1    // sec
-	FLUSH_TIMEOUT      = 50   // ms
+	TIME_TO_LIVE       = 56 // sec
+	RECONNECT_INTERVAL = 1  // sec
+	FLUSH_TIMEOUT      = 50 // ms
 )
 
 type WSConn struct {
@@ -148,7 +148,7 @@ func (ws *WSConn) WebsocketPuller() error {
 					break
 				}
 
-				// send switch cmd
+				// send switch cmd (new wsconn)
 				err = wsconn.WriteMessage(&common.Message{
 					Wid: ws.Wid,
 					Cmd: common.SWITCH,
@@ -158,7 +158,7 @@ func (ws *WSConn) WebsocketPuller() error {
 					break
 				}
 
-				// flush all reads
+				// flush all reads (old ws)
 				ws.WSConn.SetReadDeadline(time.Now().Add(time.Millisecond * FLUSH_TIMEOUT))
 				for {
 					msg, err := ws.ReadMessage()
@@ -169,13 +169,16 @@ func (ws *WSConn) WebsocketPuller() error {
 					conn, ok := ws.Local.Conns.Load(msg.Cid)
 					if ok {
 						log.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
-						conn.(Conn).MsgChan <- msg
+						conn.(*Conn).MsgChan <- msg
 					}
 				}
 
 				// finally do the switch
 				ws.WriteLock.Lock()
 				ws.WSConn.Close()
+				// reset connection status, because
+				ws.Connected = true
+				ws.CanConnect = true
 				ws.WSConn = wsconn.WSConn
 				ws.WriteLock.Unlock()
 			default:
@@ -208,6 +211,7 @@ func (ws *WSConn) WriteMessage(msg *common.Message) error {
 	err = ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
 	ws.RWLock.Lock()
 	if err != nil {
+		log.Println("-----> set false by writemessage")
 		ws.Connected = false
 		ws.CanConnect = false
 	}

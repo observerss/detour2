@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	DIAL_TIMEOUT       = 3  // sec
 	TIME_TO_LIVE       = 56 // sec
 	RECONNECT_INTERVAL = 1  // sec
 	FLUSH_TIMEOUT      = 50 // ms
@@ -90,15 +91,17 @@ func Connect(wsconn *WSConn, force bool) error {
 	}
 	wsconn.RWLock.RUnlock()
 
-	dialer := websocket.Dialer{HandshakeTimeout: time.Second * 3}
+	dialer := websocket.Dialer{HandshakeTimeout: time.Second * DIAL_TIMEOUT}
 	conn, _, err := dialer.Dial(wsconn.Url, nil)
 
-	wsconn.RWLock.Lock()
 	if err != nil {
+		wsconn.RWLock.Lock()
 		wsconn.CanConnect = false
 		wsconn.Connected = false
+		wsconn.RWLock.Unlock()
 		return err
 	}
+	wsconn.RWLock.Lock()
 	log.Println(wsconn.Wid, "ws, connected")
 	wsconn.Connected = true
 	wsconn.CanConnect = true

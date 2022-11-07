@@ -1,2 +1,3 @@
 all:
+	go test ./...
 	go build -o dist/detour .

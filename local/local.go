@@ -6,10 +6,12 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
-	BUFFER_SIZE = 16 * 1024
+	BUFFER_SIZE  = 16 * 1024
+	READ_TIMEOUT = 60 // sec
 )
 
 type Local struct {
@@ -197,6 +199,7 @@ func (l *Local) CopyToWS(conn *Conn) {
 
 	buf := make([]byte, BUFFER_SIZE)
 	for {
+		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
 			log.Println(conn.Cid, "copy-to-ws, read error", err)

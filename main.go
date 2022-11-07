@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 
 	"detour/common"
@@ -22,6 +23,7 @@ func main() {
 		fmt.Println("run with server/local subcommand")
 		os.Exit(1)
 	}
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	switch os.Args[1] {
 	case "server":

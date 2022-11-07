@@ -25,6 +25,7 @@ type WSConn struct {
 	TimeToLive int
 	CanConnect bool
 	Connected  bool
+	ConnChan   chan interface{}
 	WSConn     *websocket.Conn
 	WriteLock  sync.Mutex
 	RWLock     sync.RWMutex
@@ -41,6 +42,7 @@ func NewWSConn(url string, wid string, local *Local) *WSConn {
 		CanConnect: true,
 		Packer:     local.Packer,
 		Local:      local,
+		ConnChan:   make(chan interface{}),
 	}
 }
 
@@ -105,10 +107,26 @@ func Connect(wsconn *WSConn, force bool) error {
 	log.Println(wsconn.Wid, "ws, connected")
 	wsconn.Connected = true
 	wsconn.CanConnect = true
-	wsconn.WSConn = conn
 	wsconn.RWLock.Unlock()
 
+	wsconn.WriteLock.Lock()
+	wsconn.WSConn = conn
+	wsconn.WriteLock.Unlock()
+
+	if !IsClosed(wsconn.ConnChan) {
+		close(wsconn.ConnChan)
+	}
 	return nil
+}
+
+func IsClosed(ch <-chan interface{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+	}
+
+	return false
 }
 
 func Sum(visited []byte) int {
@@ -127,10 +145,24 @@ func (ws *WSConn) WebsocketPuller() error {
 
 	log.Println(ws.Wid, "ws, start")
 	for {
-		// FIXIT: this will keep server running, not we want
+		// block when num of conns are 0
+		numOfConns := 0
+		ws.Local.Conns.Range(func(key, value any) bool {
+			if value.(*Conn).WSConn == ws {
+				numOfConns += 1
+			}
+			return true
+		})
+		if numOfConns == 0 {
+			ws.ConnChan = make(chan interface{})
+			log.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
+			<-ws.ConnChan
+			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
+		}
+
 		// try connect if not connected
 		if !ws.Connected {
-			log.Println(ws.Wid, "ws, wait for reconnect")
+			log.Println(ws.Wid, "ws, wait for reconnect", numOfConns)
 			time.Sleep(time.Second * RECONNECT_INTERVAL)
 			err := Connect(ws, true)
 			if err != nil {
@@ -180,9 +212,10 @@ func (ws *WSConn) WebsocketPuller() error {
 				// finally do the switch
 				ws.WriteLock.Lock()
 				ws.WSConn.Close()
-				// reset connection status, because
+				// reset connection status
+				ws.RWLock.Lock()
 				ws.Connected = true
-				ws.CanConnect = true
+				ws.RWLock.Unlock()
 				ws.WSConn = wsconn.WSConn
 				ws.WriteLock.Unlock()
 			default:
@@ -215,9 +248,7 @@ func (ws *WSConn) WriteMessage(msg *common.Message) error {
 	err = ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
 	ws.RWLock.Lock()
 	if err != nil {
-		log.Println("-----> set false by writemessage")
 		ws.Connected = false
-		ws.CanConnect = false
 	}
 	ws.RWLock.Unlock()
 	ws.WriteLock.Unlock()
@@ -229,7 +260,6 @@ func (ws *WSConn) ReadMessage() (*common.Message, error) {
 		mt, data, err := ws.WSConn.ReadMessage()
 		if err != nil {
 			ws.Connected = false
-			ws.CanConnect = false
 			return nil, err
 		}
 		if mt != websocket.BinaryMessage {

@@ -2,7 +2,7 @@ package local
 
 import (
 	"detour/common"
-	"log"
+	"detour/logger"
 	"net"
 	"strings"
 	"sync"
@@ -48,7 +48,7 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 	case PROTO_SOCKS5:
 		local.Proto = &Socks5Proto{}
 	default:
-		log.Fatal("proto", lconf.Proto, "not supported")
+		logger.Error.Fatal("proto", lconf.Proto, "not supported")
 	}
 	for _, url := range urls {
 		wid, _ := common.GenerateRandomStringURLSafe(3)
@@ -61,10 +61,10 @@ func (l *Local) RunLocal() {
 	// websocket.Dialer{HandshakeTimeout: time.Second * 3}
 	listen, err := net.Listen(l.Network, l.Address)
 	if err != nil {
-		log.Fatal(err)
+		logger.Error.Fatal(err)
 	}
 
-	log.Println("Listening on " + l.Network + "://" + l.Address)
+	logger.Info.Println("Listening on " + l.Network + "://" + l.Address)
 
 	// background wsconn puller & keeper
 	for _, wsconn := range l.WSConns {
@@ -74,7 +74,7 @@ func (l *Local) RunLocal() {
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
-			log.Println("run, accept error", err)
+			logger.Error.Println("run, accept error", err)
 			continue
 		}
 
@@ -87,27 +87,27 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	handleOk := false
 	defer func() {
 		if !handleOk {
-			log.Println(cid, "handle, close conn")
+			logger.Error.Println(cid, "handle, close conn")
 			netconn.Close()
 			l.Conns.Delete(cid)
 		}
 	}()
 
-	log.Println(cid, "handle, init")
+	logger.Info.Println(cid, "handle, init")
 	req, err := l.Proto.Get(netconn)
 	if err != nil {
-		log.Println(cid, "init error", err)
+		logger.Debug.Println(cid, "init error", err)
 		return
 	}
 
-	log.Println(cid, "handle, get wsconn")
+	logger.Debug.Println(cid, "handle, get wsconn")
 	wsconn, err := l.GetWSConn()
 	if err != nil {
-		log.Println(cid, "cannot connect to ws", err)
+		logger.Debug.Println(cid, "cannot connect to ws", err)
 		return
 	}
 
-	log.Println(cid, "handle, wsconn send 'connect'")
+	logger.Debug.Println(cid, "handle, wsconn send 'connect'")
 	msg := &common.Message{
 		Cmd:     common.CONNECT,
 		Cid:     cid,
@@ -117,11 +117,11 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	}
 	err = wsconn.WriteMessage(msg)
 	if err != nil {
-		log.Println(cid, "handle, wsconn send error", err)
+		logger.Debug.Println(cid, "handle, wsconn send error", err)
 		return
 	}
 
-	log.Println(cid, "handle, wait on msg channel")
+	logger.Debug.Println(cid, "handle, wait on msg channel")
 	conn := &Conn{
 		Wid:     wsconn.Wid,
 		Cid:     cid,
@@ -135,15 +135,15 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	l.Conns.Store(cid, conn)
 	select {
 	case <-conn.Quit:
-		log.Println(cid, "handle, quit before ack")
+		logger.Debug.Println(cid, "handle, quit before ack")
 		return
 	case msg = <-conn.MsgChan:
 	}
 
-	log.Println(cid, "handle, send ack", msg.Ok, msg.Network, msg.Address)
+	logger.Debug.Println(cid, "handle, send ack", msg.Ok, msg.Network, msg.Address)
 	err = l.Proto.Ack(netconn, msg.Ok, msg.Msg)
 	if err != nil {
-		log.Println(cid, "handle, ack error", err)
+		logger.Debug.Println(cid, "handle, ack error", err)
 		return
 	}
 
@@ -153,56 +153,61 @@ func (l *Local) HandleConn(netconn net.Conn) {
 }
 
 func (l *Local) CopyFromWS(conn *Conn) {
-	log.Println(conn.Cid, "copy-from-ws, start")
 	defer func() {
-		log.Println(conn.Cid, "copy-from-ws, close conn")
+		logger.Info.Println(conn.Cid, "copy-from-ws, close conn")
 		conn.NetConn.Close()
 		l.Conns.Delete(conn.Cid)
 	}()
+
+	logger.Debug.Println(conn.Cid, "copy-from-ws, start")
 
 	for {
 		var msg *common.Message
 		select {
 		case <-conn.Quit:
-			log.Println(conn.Cid, "copy-from-ws, 'quit'")
+			logger.Debug.Println(conn.Cid, "copy-from-ws, 'quit'")
 			return
 		case msg = <-conn.MsgChan:
 		}
 
-		log.Println(conn.Cid, "copy-from-ws, get <=== queue", msg.Cmd, len(msg.Data))
+		logger.Debug.Println(conn.Cid, "copy-from-ws, get <=== queue", msg.Cmd, len(msg.Data))
 		switch msg.Cmd {
 		case common.CLOSE:
-			log.Println(conn.Cid, "copy-from-ws, 'close'")
+			logger.Debug.Println(conn.Cid, "copy-from-ws, 'close'")
 			return
 		case common.DATA:
 			nw, err := conn.NetConn.Write(msg.Data)
 			if err != nil {
-				log.Println(conn.Cid, "copy-from-ws, write error", err)
+				logger.Debug.Println(conn.Cid, "copy-from-ws, write error", err)
 				return
 			}
 			if nw == 0 {
-				log.Println(conn.Cid, "copy-from-ws, close by '0' data")
+				logger.Debug.Println(conn.Cid, "copy-from-ws, close by '0' data")
 				return
 			}
-			log.Println(conn.Cid, "copy-from-ws, written ===> local", nw)
+			logger.Debug.Println(conn.Cid, "copy-from-ws, written ===> local", nw)
 		}
 	}
 }
 
 func (l *Local) CopyToWS(conn *Conn) {
-	log.Println(conn.Cid, "copy-to-ws, start")
 	defer func() {
-		log.Println(conn.Cid, "copy-to-ws, close conn")
+		logger.Info.Println(conn.Cid, "copy-to-ws, close conn")
 		conn.NetConn.Close()
 		l.Conns.Delete(conn.Cid)
+		if !IsClosed(conn.Quit) {
+			close(conn.Quit)
+		}
 	}()
+
+	logger.Debug.Println(conn.Cid, "copy-to-ws, start")
 
 	buf := make([]byte, BUFFER_SIZE)
 	for {
 		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
-			log.Println(conn.Cid, "copy-to-ws, read error", err)
+			logger.Debug.Println(conn.Cid, "copy-to-ws, read error", err)
 			return
 		}
 
@@ -218,17 +223,17 @@ func (l *Local) CopyToWS(conn *Conn) {
 			msg.Cmd = common.CLOSE
 		}
 
-		log.Println(conn.Cid, "copy-to-ws, read <=== local", msg.Cmd, len(msg.Data))
+		logger.Debug.Println(conn.Cid, "copy-to-ws, read <=== local", msg.Cmd, len(msg.Data))
 		err = conn.WSConn.WriteMessage(msg)
 		if err != nil {
-			log.Println(conn.Cid, "copy-to-ws, write error", err)
+			logger.Debug.Println(conn.Cid, "copy-to-ws, write error", err)
 			return
 		}
 
-		log.Println(conn.Cid, "copy-to-ws, sent ===> ws", nr)
+		logger.Debug.Println(conn.Cid, "copy-to-ws, sent ===> ws", nr)
 
 		if nr == 0 {
-			log.Println(conn.Cid, "copy-to-ws, close by '0' data")
+			logger.Debug.Println(conn.Cid, "copy-to-ws, close by '0' data")
 			return
 		}
 	}

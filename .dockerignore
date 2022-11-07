@@ -1,5 +1,3 @@
 dist/*
 build/*
-.vscode/*
-*.pyc
 *.pprof

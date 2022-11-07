@@ -2,12 +2,13 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"io"
 	"log"
 	"os"
 
 	"detour/common"
 	"detour/local"
+	"detour/logger"
 	"detour/server"
 )
 
@@ -16,11 +17,12 @@ var (
 	listen   string
 	remotes  string
 	proto    string
+	debug    bool
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("run with server/local subcommand")
+		logger.Error.Println("run with server/local subcommand")
 		os.Exit(1)
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -30,7 +32,13 @@ func main() {
 		ser := flag.NewFlagSet("server", flag.ExitOnError)
 		ser.StringVar(&password, "p", "password", "password for authentication")
 		ser.StringVar(&listen, "l", "tcp://localhost:3811", "address to listen on")
+		ser.BoolVar(&debug, "d", false, "print debug log")
+
 		ser.Parse(os.Args[2:])
+
+		if !debug {
+			logger.Debug.SetOutput(io.Discard)
+		}
 
 		s := server.NewServer(&common.ServerConfig{
 			Listen:   listen,
@@ -43,8 +51,14 @@ func main() {
 		cli.StringVar(&password, "p", "password", "password for authentication")
 		cli.StringVar(&listen, "l", "tcp://localhost:3810", "address to listen on")
 		cli.StringVar(&proto, "t", "socks5", "target protocol to use")
+		cli.BoolVar(&debug, "d", false, "print debug log")
 
 		cli.Parse(os.Args[2:])
+
+		if !debug {
+			logger.Debug.SetOutput(io.Discard)
+		}
+
 		c := local.NewLocal(&common.LocalConfig{
 			Listen:   listen,
 			Remotes:  remotes,
@@ -53,7 +67,7 @@ func main() {
 		})
 		c.RunLocal()
 	default:
-		fmt.Println("only server/local subcommands are allowed")
+		logger.Error.Println("only server/local subcommands are allowed")
 		os.Exit(1)
 	}
 }

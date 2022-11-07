@@ -2,8 +2,8 @@ package local
 
 import (
 	"detour/common"
+	"detour/logger"
 	"errors"
-	"log"
 	"math/rand"
 	"strings"
 	"sync"
@@ -104,7 +104,7 @@ func Connect(wsconn *WSConn, force bool) error {
 		return err
 	}
 	wsconn.RWLock.Lock()
-	log.Println(wsconn.Wid, "ws, connected")
+	logger.Debug.Println(wsconn.Wid, "ws, connected")
 	wsconn.Connected = true
 	wsconn.CanConnect = true
 	wsconn.RWLock.Unlock()
@@ -143,7 +143,7 @@ func Sum(visited []byte) int {
 func (ws *WSConn) WebsocketPuller() error {
 	var switchTimer *time.Timer
 
-	log.Println(ws.Wid, "ws, start")
+	logger.Debug.Println(ws.Wid, "ws, start")
 	for {
 		// block when num of conns are 0
 		numOfConns := 0
@@ -154,15 +154,17 @@ func (ws *WSConn) WebsocketPuller() error {
 			return true
 		})
 		if numOfConns == 0 {
+			ws.RWLock.Lock()
 			ws.ConnChan = make(chan interface{})
-			log.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
+			ws.RWLock.Unlock()
+			logger.Debug.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
 			<-ws.ConnChan
 			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
 		}
 
 		// try connect if not connected
 		if !ws.Connected {
-			log.Println(ws.Wid, "ws, wait for reconnect", numOfConns)
+			logger.Debug.Println(ws.Wid, "ws, wait for reconnect", numOfConns)
 			time.Sleep(time.Second * RECONNECT_INTERVAL)
 			err := Connect(ws, true)
 			if err != nil {
@@ -176,7 +178,7 @@ func (ws *WSConn) WebsocketPuller() error {
 			select {
 			case <-switchTimer.C:
 				// create new connection
-				log.Println(ws.Wid, "ws, switch start")
+				logger.Debug.Println(ws.Wid, "ws, switch start")
 				wsconn := NewWSConn(ws.Url, ws.Wid, ws.Local)
 				err := Connect(wsconn, false)
 				if err != nil {
@@ -201,10 +203,10 @@ func (ws *WSConn) WebsocketPuller() error {
 					if err != nil {
 						break
 					}
-					log.Println(ws.Wid, "ws, flush read", msg.Cmd, len(msg.Data))
+					logger.Debug.Println(ws.Wid, "ws, flush read", msg.Cmd, len(msg.Data))
 					conn, ok := ws.Local.Conns.Load(msg.Cid)
 					if ok {
-						log.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
+						logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
 						conn.(*Conn).MsgChan <- msg
 					}
 				}
@@ -223,17 +225,17 @@ func (ws *WSConn) WebsocketPuller() error {
 		}
 
 		// read & put queue
-		log.Println(ws.Wid, "ws, wait read")
+		logger.Debug.Println(ws.Wid, "ws, wait read")
 		msg, err := ws.ReadMessage()
 		if err != nil {
-			log.Println(ws.Wid, "ws, read error", err)
+			logger.Debug.Println(ws.Wid, "ws, read error", err)
 			continue
 		}
 
-		log.Println(ws.Wid, "ws, read", msg.Cmd, len(msg.Data))
+		logger.Debug.Println(ws.Wid, "ws, read", msg.Cmd, len(msg.Data))
 		conn, ok := ws.Local.Conns.Load(msg.Cid)
 		if ok {
-			log.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
+			logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
 			conn.(*Conn).MsgChan <- msg
 		}
 	}

@@ -31,7 +31,7 @@ func main() {
 	case "server":
 		ser := flag.NewFlagSet("server", flag.ExitOnError)
 		ser.StringVar(&password, "p", "password", "password for authentication")
-		ser.StringVar(&listen, "l", "tcp://localhost:3811", "address to listen on")
+		ser.StringVar(&listen, "l", "tcp://0.0.0.0:3811", "address to listen on")
 		ser.BoolVar(&debug, "d", false, "print debug log")
 
 		ser.Parse(os.Args[2:])
@@ -49,7 +49,7 @@ func main() {
 		cli := flag.NewFlagSet("local", flag.ExitOnError)
 		cli.StringVar(&remotes, "r", "ws://localhost:3811/ws", "remote server(s) to connect, seperated by comma")
 		cli.StringVar(&password, "p", "password", "password for authentication")
-		cli.StringVar(&listen, "l", "tcp://localhost:3810", "address to listen on")
+		cli.StringVar(&listen, "l", "tcp://0.0.0.0:3810", "address to listen on")
 		cli.StringVar(&proto, "t", "socks5", "target protocol to use")
 		cli.BoolVar(&debug, "d", false, "print debug log")
 

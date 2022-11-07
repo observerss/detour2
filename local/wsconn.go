@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	DIAL_TIMEOUT       = 3  // sec
-	TIME_TO_LIVE       = 56 // sec
-	RECONNECT_INTERVAL = 1  // sec
-	FLUSH_TIMEOUT      = 50 // ms
+	DIAL_TIMEOUT       = 3   // sec
+	TIME_TO_LIVE       = 596 // sec
+	RECONNECT_INTERVAL = 1   // sec
+	FLUSH_TIMEOUT      = 50  // ms
 )
 
 type WSConn struct {
@@ -76,6 +76,7 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 		if !wsconn.Connected {
 			err := Connect(wsconn, false)
 			if err != nil {
+				logger.Error.Println("ws, connect error", err)
 				visited[idx] = 1
 				continue
 			}

@@ -13,6 +13,6 @@ func Test_PACKER(t *testing.T) {
 	msg2, _ := p.Unpack(data)
 	log.Println("unpacked", msg2)
 	if msg.Cmd != msg2.Cmd || msg.Network != msg2.Network || msg.Address != msg2.Address || msg.Cid != msg2.Cid || msg.Wid != msg2.Wid || string(msg.Data) != string(msg2.Data) {
-		t.Error("msg and msg2 not match", msg, msg2)
+		t.Error("msg and msg2 does not match", msg, msg2)
 	}
 }

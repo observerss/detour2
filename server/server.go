@@ -320,7 +320,8 @@ func (s *Server) HandleClose(handle *Handle) {
 
 func (s *Server) HandleSwitch(handle *Handle) {
 	msg := handle.Msg
-	conn := handle.WSConn
+	newconn := handle.WSConn
+	newlock := handle.WSLock
 
 	count := 0
 	total := 0
@@ -328,10 +329,12 @@ func (s *Server) HandleSwitch(handle *Handle) {
 	s.Conns.Range(func(key, value any) bool {
 		total += 1
 		sconn := value.(*Conn)
-		if sconn.Wid == msg.Wid && conn != sconn.WSConn {
-			sconn.WSLock.Lock()
-			sconn.WSConn = conn
-			sconn.WSLock.Unlock()
+		if sconn.Wid == msg.Wid && newconn != sconn.WSConn {
+			oldlock := sconn.WSLock
+			oldlock.Lock()
+			sconn.WSConn = newconn
+			sconn.WSLock = newlock
+			oldlock.Unlock()
 			count += 1
 		}
 		return true

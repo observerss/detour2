@@ -88,12 +88,16 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 }
 
 func Connect(wsconn *WSConn, force bool) error {
+	logger.Debug.Println(wsconn.Wid, "ws, try connect")
 	wsconn.ConnectLock.Lock()
-	defer wsconn.ConnectLock.Unlock()
+	defer func() {
+		logger.Debug.Println(wsconn.Wid, "ws, try connect done")
+		wsconn.ConnectLock.Unlock()
+	}()
 
 	wsconn.RWLock.RLock()
 	if !wsconn.CanConnect && !force {
-		wsconn.RWLock.Unlock()
+		wsconn.RWLock.RUnlock()
 		return errors.New("can not connect")
 	}
 	wsconn.RWLock.RUnlock()
@@ -106,6 +110,7 @@ func Connect(wsconn *WSConn, force bool) error {
 		wsconn.CanConnect = false
 		wsconn.Connected = false
 		wsconn.RWLock.Unlock()
+		logger.Debug.Println(wsconn.Wid, "ws, dial error", err)
 		return err
 	}
 	wsconn.RWLock.Lock()

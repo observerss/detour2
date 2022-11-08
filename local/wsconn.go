@@ -20,17 +20,18 @@ const (
 )
 
 type WSConn struct {
-	Url        string
-	Wid        string
-	TimeToLive int
-	CanConnect bool
-	Connected  bool
-	ConnChan   chan interface{}
-	WSConn     *websocket.Conn
-	WriteLock  sync.Mutex
-	RWLock     sync.RWMutex
-	Packer     *common.Packer
-	Local      *Local
+	Url         string
+	Wid         string
+	TimeToLive  int
+	CanConnect  bool
+	Connected   bool
+	ConnChan    chan interface{}
+	WSConn      *websocket.Conn
+	WriteLock   sync.Mutex
+	RWLock      sync.RWMutex
+	ConnectLock sync.Mutex
+	Packer      *common.Packer
+	Local       *Local
 }
 
 func NewWSConn(url string, wid string, local *Local) *WSConn {
@@ -87,6 +88,9 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 }
 
 func Connect(wsconn *WSConn, force bool) error {
+	wsconn.ConnectLock.Lock()
+	defer wsconn.ConnectLock.Unlock()
+
 	wsconn.RWLock.RLock()
 	if !wsconn.CanConnect && !force {
 		wsconn.RWLock.Unlock()

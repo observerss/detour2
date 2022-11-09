@@ -15,6 +15,8 @@ rm -f dist/detour2.tar.gz; gzip dist/detour2.tar
 echo "docker push"
 docker tag detour2:latest registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:$VERSION
 docker push registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:$VERSION
+docker tag detour2:latest registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:latest
+docker push registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:latest
 
 echo "git tag and push"
 sed -i -r 's/VERSION =.*/VERSION = "'$VERSION'"/g' version.go

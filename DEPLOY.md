@@ -53,7 +53,7 @@ curl https://ef-fd-asdfasdf.cn-hongkong.fcapp.run/
 
 ```bash
 docker run --rm -it \
-    registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:0.3.0 \
+    registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2 \
     ./detour deploy -m server -k ACCESS_KEY_ID -s ACCESS_KEY_SECRET -a ACCOUNT_ID -remove
 ```
 
@@ -94,7 +94,7 @@ Usage of deploy:
 ```bash
 docker run --rm -it \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2:0.3.0 \
+    registry.cn-hongkong.aliyuncs.com/hjcrocks/detour2 \
     ./detour deploy -m local -k ACCESS_KEY_ID -s ACCESS_KEY_SECRET -a ACCOUNT_ID -pp 3333 -p PASSWORD
 ```
 

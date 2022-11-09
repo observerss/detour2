@@ -47,7 +47,7 @@ type DeployConfig struct {
 	FunctionName    string `json:"functionName" example:"dt2"`
 	TriggerName     string `json:"triggerName" example:"ws2"`
 	Password        string `json:"password" example:"pass123"`
-	Image           string `json:"image" example:"registry-vpc.cn-hongkong.aliyuncs.com/hjcrocks/detour2:0.2.5"`
+	Image           string `json:"image" example:"registry-vpc.cn-hongkong.aliyuncs.com/hjcrocks/detour2:latest"`
 	PublicPort      int    `json:"publicPort" example:"3810"`
 	Remove          bool   `json:"remove" example:"false"`
 }

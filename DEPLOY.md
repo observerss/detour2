@@ -101,9 +101,9 @@ docker run --rm -it \
 #### **测试代理工作正常**
 
 ```bash
-# gist地址被墙, curl返回为空
-curl https://gist.github.com
+# gist地址被墙, curl返回空或者卡住
+curl --head https://gist.github.com
 
 # 用了代理就能访问了
-curl --head --socks5 localhost:3333 https://gist.github.com
+curl --head --socks5-hostname localhost:3333 --head https://gist.github.com
 ```

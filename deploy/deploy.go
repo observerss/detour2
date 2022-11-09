@@ -79,7 +79,7 @@ func (c *Client) CreateFunction() error {
 func (c *Client) UpdateFunction() error {
 	request := &fc_open20210406.UpdateFunctionRequest{
 		CaPort: tea.Int32(3811),
-		Cpu:    tea.Float32(0.1),
+		Cpu:    tea.Float32(0.05),
 		CustomContainerConfig: &fc_open20210406.CustomContainerConfig{
 			AccelerationType: tea.String("Default"),
 			Args:             tea.String(""),

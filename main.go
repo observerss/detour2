@@ -7,23 +7,34 @@ import (
 	"os"
 
 	"detour/common"
+	"detour/deploy"
 	"detour/local"
 	"detour/logger"
 	"detour/server"
 )
 
 var (
-	password string
-	listen   string
-	remotes  string
-	proto    string
-	debug    bool
+	password     string
+	listen       string
+	remotes      string
+	proto        string
+	debug        bool
+	mode         string
+	key          string
+	secret       string
+	accountId    string
+	region       string
+	serviceName  string
+	functionName string
+	triggerName  string
+	image        string
+	publicPort   int
+	remove       bool
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		logger.Error.Println("run with server/local subcommand")
-		os.Exit(1)
+		logger.Error.Fatal("run with 'server'/'local'/'deploy' subcommand")
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
@@ -66,8 +77,56 @@ func main() {
 			Proto:    proto,
 		})
 		c.RunLocal()
+	case "deploy":
+		cli := flag.NewFlagSet("deploy", flag.ExitOnError)
+		cli.StringVar(&mode, "m", "", "deploy 'server' or 'local'")
+		cli.StringVar(&key, "k", "", "aliyun access key id")
+		cli.StringVar(&secret, "s", "", "aliyun access key secret")
+		cli.StringVar(&accountId, "a", "", "aliyun main account id")
+		cli.StringVar(&region, "r", "cn-hongkong", "aliyun region")
+		cli.StringVar(&serviceName, "sn", "api2", "aliyun fc service name")
+		cli.StringVar(&functionName, "fn", "dt2", "aliyun fc function name")
+		cli.StringVar(&triggerName, "tn", "ws2", "aliyun fc trigger name")
+		cli.StringVar(&password, "p", "password", "password for authentication")
+		cli.StringVar(&image, "i", "registry-vpc.cn-hongkong.aliyuncs.com/hjcrocks/detour2:0.3.0", "aliyun container registry uri")
+		cli.IntVar(&publicPort, "pp", 3810, "public port to use")
+		cli.BoolVar(&remove, "remove", false, "remove all fc trigger/function/service")
+
+		cli.Parse(os.Args[2:])
+
+		if mode == "" {
+			cli.Usage()
+			logger.Error.Fatal("mode cannot be empty")
+		}
+
+		if key == "" || secret == "" || accountId == "" {
+			cli.Usage()
+			logger.Error.Fatal("aliyun credentials cannot be empty")
+		}
+
+		conf := &common.DeployConfig{
+			AccessKeyId:     key,
+			AccessKeySecret: secret,
+			AccountId:       accountId,
+			Region:          region,
+			ServiceName:     serviceName,
+			FunctionName:    functionName,
+			TriggerName:     triggerName,
+			Password:        password,
+			Image:           image,
+			PublicPort:      publicPort,
+			Remove:          remove,
+		}
+		switch mode {
+		case "server":
+			deploy.DeployServer(conf)
+		case "local":
+			deploy.DeployLocal(conf)
+		default:
+			logger.Error.Fatal("method should be either 'server' or 'local'")
+		}
+
 	default:
-		logger.Error.Println("only server/local subcommands are allowed")
-		os.Exit(1)
+		logger.Error.Fatal("only 'server'/'local'/'deploy' subcommands are allowed")
 	}
 }

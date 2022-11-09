@@ -165,7 +165,9 @@ func (ws *WSConn) WebsocketPuller() error {
 		})
 		if numOfConns == 0 {
 			ws.RWLock.Lock()
-			ws.ConnChan = make(chan interface{})
+			if IsClosed(ws.ConnChan) {
+				ws.ConnChan = make(chan interface{})
+			}
 			ws.RWLock.Unlock()
 			logger.Debug.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
 			<-ws.ConnChan

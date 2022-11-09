@@ -15,6 +15,12 @@ RUN --mount=type=cache,id=go_mod,target=/go/pkg/mod \
 
 FROM debian:bullseye as runner
 
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
+    && apt update -y \
+    && apt install -y --no-install-recommends ca-certificates
+
 ENV TZ="Asia/Shanghai"
 
 WORKDIR /app

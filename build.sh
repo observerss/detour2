@@ -23,3 +23,4 @@ sed -i -r 's/VERSION =.*/VERSION = "'$VERSION'"/g' version.go
 git commit -a -m "chore: pump to version $VERSION"
 git tag v"$1" -f
 git push --tag -f
+git push

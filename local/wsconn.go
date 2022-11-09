@@ -89,11 +89,17 @@ func (l *Local) GetWSConn() (*WSConn, error) {
 
 func Connect(wsconn *WSConn, force bool) error {
 	logger.Debug.Println(wsconn.Wid, "ws, try connect")
+
 	wsconn.ConnectLock.Lock()
 	defer func() {
-		logger.Debug.Println(wsconn.Wid, "ws, try connect done")
 		wsconn.ConnectLock.Unlock()
+		logger.Debug.Println(wsconn.Wid, "ws, try connect done")
 	}()
+
+	if wsconn.Connected {
+		logger.Debug.Println(wsconn.Wid, "ws, connected by others")
+		return nil
+	}
 
 	wsconn.RWLock.RLock()
 	if !wsconn.CanConnect && !force {

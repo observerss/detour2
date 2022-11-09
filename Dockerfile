@@ -13,7 +13,7 @@ RUN --mount=type=cache,id=go_mod,target=/go/pkg/mod \
     go build -o ./dist/detour .
 
 
-FROM debian:bullseye as runner
+FROM debian:bullseye-slim as runner
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \

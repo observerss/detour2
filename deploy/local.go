@@ -17,7 +17,7 @@ import (
 	"github.com/docker/go-connections/nat"
 )
 
-const CONTAINER_NAME = "detour2-deploy-client"
+const CONTAINER_NAME = "detour2-deploy-local"
 
 func DeployLocal(conf *common.DeployConfig) {
 	logger.Info.Println("deploy on local...")

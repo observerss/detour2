@@ -8,6 +8,7 @@ import (
 	"log"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 const CONTAINER_NAME = "detour2-deploy-client"
@@ -34,7 +35,7 @@ func DeployLocal(conf *common.DeployConfig) {
 
 	cmd = exec.Command("docker", "run", "-d",
 		"--name", CONTAINER_NAME, "--restart", "always", "-p"+strconv.Itoa(conf.PublicPort)+":3810",
-		conf.Image, "./detour", "local", "-p", conf.Password, "-r", wsurl, "-l", "tcp://0.0.0.0:3810",
+		strings.ReplaceAll(conf.Image, "-vpc", ""), "./detour", "local", "-p", conf.Password, "-r", wsurl, "-l", "tcp://0.0.0.0:3810",
 	)
 	err = RunCommand(cmd)
 	if err != nil {

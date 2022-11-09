@@ -88,7 +88,7 @@ func main() {
 		cli.StringVar(&functionName, "fn", "dt2", "aliyun fc function name")
 		cli.StringVar(&triggerName, "tn", "ws2", "aliyun fc trigger name")
 		cli.StringVar(&password, "p", "password", "password for authentication")
-		cli.StringVar(&image, "i", "registry-vpc.cn-hongkong.aliyuncs.com/hjcrocks/detour2:0.3.0", "aliyun container registry uri")
+		cli.StringVar(&image, "i", "registry-vpc.cn-hongkong.aliyuncs.com/hjcrocks/detour2", "aliyun container registry uri")
 		cli.IntVar(&publicPort, "pp", 3810, "public port to use")
 		cli.BoolVar(&remove, "remove", false, "remove all fc trigger/function/service")
 

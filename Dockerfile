@@ -28,4 +28,5 @@ RUN mkdir -p logs
 
 COPY --from=builder /src/dist/detour /app/
 
+
 CMD ["/app/detour"]

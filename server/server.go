@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"detour/common"
-	"detour/logger"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +10,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/logger"
 
 	_ "net/http/pprof"
 

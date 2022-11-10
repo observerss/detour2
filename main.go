@@ -6,11 +6,11 @@ import (
 	"log"
 	"os"
 
-	"detour/common"
-	"detour/deploy"
-	"detour/local"
-	"detour/logger"
-	"detour/server"
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/deploy"
+	"github.com/observerss/detour2/local"
+	"github.com/observerss/detour2/logger"
+	"github.com/observerss/detour2/server"
 )
 
 var (

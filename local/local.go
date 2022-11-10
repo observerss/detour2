@@ -1,12 +1,13 @@
 package local
 
 import (
-	"detour/common"
-	"detour/logger"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/logger"
 )
 
 const (

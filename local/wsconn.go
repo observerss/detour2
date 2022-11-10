@@ -1,13 +1,14 @@
 package local
 
 import (
-	"detour/common"
-	"detour/logger"
 	"errors"
 	"math/rand"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/logger"
 
 	"github.com/gorilla/websocket"
 )

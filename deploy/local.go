@@ -3,13 +3,14 @@ package deploy
 import (
 	"bufio"
 	"context"
-	"detour/common"
-	"detour/logger"
 	"fmt"
 	"log"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/logger"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"

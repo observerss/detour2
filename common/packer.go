@@ -2,11 +2,12 @@ package common
 
 import (
 	"bytes"
-	"detour/crypto/shuffle"
-	"detour/crypto/xxtea"
 	"encoding/binary"
 	"encoding/gob"
 	"math/rand"
+
+	"github.com/observerss/detour2/crypto/shuffle"
+	"github.com/observerss/detour2/crypto/xxtea"
 )
 
 const (

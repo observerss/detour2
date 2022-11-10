@@ -1,4 +1,4 @@
-module detour
+module github.com/observerss/detour2
 
 go 1.19
 

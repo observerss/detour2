@@ -1,8 +1,8 @@
 package deploy
 
 import (
-	"detour/common"
-	"detour/logger"
+	"github.com/observerss/detour2/common"
+	"github.com/observerss/detour2/logger"
 )
 
 func DeployServer(conf *common.DeployConfig) {

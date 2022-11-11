@@ -20,22 +20,22 @@ import (
 
 const CONTAINER_NAME = "detour2-deploy-local"
 
-func DeployLocal(conf *common.DeployConfig) {
+func DeployLocal(conf *common.DeployConfig) error {
 	logger.Info.Println("deploy on local...")
 
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	fc, err := NewClient(conf)
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	wsurl, err := fc.GetWebsocketURL()
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 	log.Println("remote wsurl", wsurl)
 
@@ -67,15 +67,16 @@ func DeployLocal(conf *common.DeployConfig) {
 		nil,
 		CONTAINER_NAME)
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	err = cli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{})
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	logger.Info.Println("deploy ok.")
+	return nil
 }
 
 func RunCommand(cmd *exec.Cmd) error {

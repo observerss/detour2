@@ -5,22 +5,24 @@ import (
 	"github.com/observerss/detour2/logger"
 )
 
-func DeployServer(conf *common.DeployConfig) {
+func DeployServer(conf *common.DeployConfig) error {
 	if conf.Remove {
-		RemoveServer(conf)
-		return
+		return RemoveServer(conf)
 	}
 
 	logger.Info.Println("deploy on aliyun...")
 	fc, err := NewClient(conf)
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	err = fc.FindService()
 	if err != nil {
 		logger.Info.Println("create service...")
-		fc.CreateService()
+		err = fc.CreateService()
+		if err != nil {
+			return err
+		}
 	}
 
 	err = fc.FindFunction()
@@ -33,7 +35,7 @@ func DeployServer(conf *common.DeployConfig) {
 	}
 
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	_, err = fc.GetTrigger()
@@ -41,15 +43,16 @@ func DeployServer(conf *common.DeployConfig) {
 		logger.Info.Println("create trigger...")
 		err = fc.CreateTrigger()
 		if err != nil {
-			logger.Error.Fatal(err)
+			return err
 		}
 	}
 	url, _ := fc.GetHTTPURL()
 	ws, _ := fc.GetWebsocketURL()
 	logger.Info.Printf("deploy ok.\n    url = %s\n    ws = %s", url, ws)
+	return nil
 }
 
-func RemoveServer(conf *common.DeployConfig) {
+func RemoveServer(conf *common.DeployConfig) error {
 	logger.Info.Println("remove on aliyun...")
 	fc, err := NewClient(conf)
 	if err != nil {
@@ -57,13 +60,23 @@ func RemoveServer(conf *common.DeployConfig) {
 	}
 
 	logger.Info.Println("remove trigger...")
-	fc.DeleteTrigger()
+	err = fc.DeleteTrigger()
+	if err != nil {
+		return err
+	}
 
 	logger.Info.Println("remove function...")
-	fc.DeleteFunction()
+	err = fc.DeleteFunction()
+	if err != nil {
+		return err
+	}
 
 	logger.Info.Println("remove service...")
-	fc.DeleteService()
+	err = fc.DeleteService()
+	if err != nil {
+		return err
+	}
 
 	logger.Info.Println("remove ok.")
+	return nil
 }

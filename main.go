@@ -119,9 +119,15 @@ func main() {
 		}
 		switch mode {
 		case "server":
-			deploy.DeployServer(conf)
+			err := deploy.DeployServer(conf)
+			if err != nil {
+				logger.Error.Fatal(err)
+			}
 		case "local":
-			deploy.DeployLocal(conf)
+			err := deploy.DeployLocal(conf)
+			if err != nil {
+				logger.Error.Fatal(err)
+			}
 		default:
 			logger.Error.Fatal("method should be either 'server' or 'local'")
 		}

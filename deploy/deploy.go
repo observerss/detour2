@@ -49,7 +49,7 @@ func (c *Client) FindFunction() error {
 func (c *Client) CreateFunction() error {
 	request := &fc_open20210406.CreateFunctionRequest{
 		CaPort: tea.Int32(3811),
-		Cpu:    tea.Float32(0.1),
+		Cpu:    tea.Float32(0.05),
 		CustomContainerConfig: &fc_open20210406.CustomContainerConfig{
 			AccelerationType: tea.String("Default"),
 			Args:             tea.String(""),

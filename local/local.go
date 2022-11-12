@@ -93,10 +93,12 @@ func (l *Local) RunLocal() error {
 func (l *Local) StopLocal() {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error.Panicln(r)
+			logger.Error.Println(r)
 		}
 	}()
-	l.Listener.Close()
+	if l.Listener != nil {
+		l.Listener.Close()
+	}
 	for _, wsconn := range l.WSConns {
 		c := wsconn.WSConn
 		if c != nil {

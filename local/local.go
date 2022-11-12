@@ -16,12 +16,13 @@ const (
 )
 
 type Local struct {
-	Network string
-	Address string
-	Packer  *common.Packer
-	Proto   Proto
-	WSConns map[string]*WSConn // url => WSConn
-	Conns   sync.Map           // Cid => Conn
+	Network  string
+	Address  string
+	Packer   *common.Packer
+	Proto    Proto
+	WSConns  map[string]*WSConn // url => WSConn
+	Conns    sync.Map           // Cid => Conn
+	Listener net.Listener
 }
 type Conn struct {
 	Cid     string
@@ -59,8 +60,12 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 }
 
 func (l *Local) RunLocal() {
-	// websocket.Dialer{HandshakeTimeout: time.Second * 3}
+	defer func() {
+		logger.Info.Println("Local server stopped.")
+	}()
+
 	listen, err := net.Listen(l.Network, l.Address)
+	l.Listener = listen
 	if err != nil {
 		logger.Error.Fatal(err)
 	}
@@ -76,11 +81,28 @@ func (l *Local) RunLocal() {
 		conn, err := listen.Accept()
 		if err != nil {
 			logger.Error.Println("run, accept error", err)
-			continue
+			break
 		}
 
 		go l.HandleConn(conn)
 	}
+}
+
+func (l *Local) StopLocal() {
+	l.Listener.Close()
+	for _, wsconn := range l.WSConns {
+		c := wsconn.WSConn
+		if c != nil {
+			c.Close()
+		}
+	}
+	l.Conns.Range(func(key, value any) bool {
+		c := value.(*Conn).NetConn
+		if c != nil {
+			c.Close()
+		}
+		return true
+	})
 }
 
 func (l *Local) HandleConn(netconn net.Conn) {

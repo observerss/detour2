@@ -59,7 +59,7 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 	return local
 }
 
-func (l *Local) RunLocal() {
+func (l *Local) RunLocal() error {
 	defer func() {
 		logger.Info.Println("Local server stopped.")
 	}()
@@ -67,7 +67,7 @@ func (l *Local) RunLocal() {
 	listen, err := net.Listen(l.Network, l.Address)
 	l.Listener = listen
 	if err != nil {
-		logger.Error.Fatal(err)
+		return err
 	}
 
 	logger.Info.Println("Listening on " + l.Network + "://" + l.Address)

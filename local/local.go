@@ -86,6 +86,8 @@ func (l *Local) RunLocal() error {
 
 		go l.HandleConn(conn)
 	}
+
+	return nil
 }
 
 func (l *Local) StopLocal() {

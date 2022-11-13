@@ -49,8 +49,10 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 	switch lconf.Proto {
 	case PROTO_SOCKS5:
 		local.Proto = &Socks5Proto{}
+	case PROTO_HTTP:
+		local.Proto = &HTTPProto{}
 	default:
-		logger.Error.Fatal("proto", lconf.Proto, "not supported")
+		logger.Error.Fatalln("proto", lconf.Proto, "not supported")
 	}
 	for _, url := range urls {
 		wid, _ := common.GenerateRandomStringURLSafe(3)
@@ -125,12 +127,13 @@ func (l *Local) HandleConn(netconn net.Conn) {
 		}
 	}()
 
-	logger.Info.Println(cid, "handle, init")
+	logger.Debug.Println(cid, "handle, init")
 	req, err := l.Proto.Get(netconn)
 	if err != nil {
 		logger.Debug.Println(cid, "init error", err)
 		return
 	}
+	logger.Info.Println(cid, "handle, get", req.Address)
 
 	logger.Debug.Println(cid, "handle, get wsconn")
 	wsconn, err := l.GetWSConn()
@@ -173,13 +176,53 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	}
 
 	logger.Debug.Println(cid, "handle, send ack", msg.Ok, msg.Network, msg.Address)
-	err = l.Proto.Ack(netconn, msg.Ok, msg.Msg)
+	err = l.Proto.Ack(netconn, msg.Ok, msg.Msg, req)
 	if err != nil {
 		logger.Debug.Println(cid, "handle, ack error", err)
 		return
 	}
+	if !msg.Ok {
+		logger.Debug.Println(cid, "open connection failed", msg.Msg)
+		return
+	}
+
+	// flush the request data
+	if req.More {
+		buf := make([]byte, BUFFER_SIZE)
+		for {
+			nr, err := req.Reader.Read(buf)
+			if err != nil {
+				logger.Debug.Println(cid, "handle, send more error", err)
+				return
+			}
+
+			msg := &common.Message{
+				Cmd:     common.DATA,
+				Wid:     conn.Wid,
+				Cid:     conn.Cid,
+				Network: conn.Network,
+				Address: conn.Address,
+				Data:    append([]byte{}, buf[:nr]...),
+			}
+
+			logger.Debug.Println(conn.Cid, "copy-to-ws, read <=== local", msg.Cmd, len(msg.Data))
+			err = conn.WSConn.WriteMessage(msg)
+			if err != nil {
+				logger.Debug.Println(conn.Cid, "copy-to-ws, write error", err)
+				return
+			}
+
+			logger.Debug.Println(conn.Cid, "copy-to-ws, sent ===> ws", nr)
+
+			if nr < BUFFER_SIZE {
+				break
+			}
+		}
+	}
 
 	handleOk = true
+	logger.Debug.Println(conn.Cid, "handle, ok")
+
 	go l.CopyFromWS(conn)
 	go l.CopyToWS(conn)
 }

@@ -181,6 +181,8 @@ func (s *Server) HandleConnect(handle *Handle) {
 	remote, err := dialer.Dial(msg.Network, msg.Address)
 	if err != nil {
 		msg.Ok = false
+		msg.Msg = err.Error()
+		logger.Error.Println(cid, "connect, failed", err)
 		s.SendWebosket(&conn, msg)
 		return
 	}
@@ -295,11 +297,12 @@ func (s *Server) HandleData(handle *Handle) {
 			Network: msg.Network,
 			Address: msg.Address,
 		}
-		s.Conns.Store(cid, conn)
 		if err != nil {
+			logger.Error.Println(cid, "reconnect, failed", err)
 			s.SendWebosket(conn, cmsg)
 			return
 		}
+		s.Conns.Store(cid, conn)
 		go s.RunLoop(conn)
 	} else {
 		conn = value.(*Conn)

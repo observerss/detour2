@@ -160,14 +160,15 @@ func (l *Local) HandleConn(netconn net.Conn) {
 
 	logger.Debug.Println(cid, "handle, wait on msg channel")
 	conn := &Conn{
-		Wid:     wsconn.Wid,
-		Cid:     cid,
-		MsgChan: make(chan *common.Message, 32),
-		Quit:    make(chan interface{}),
-		Network: msg.Network,
-		Address: msg.Address,
-		NetConn: netconn,
-		WSConn:  wsconn,
+		Wid:         wsconn.Wid,
+		Cid:         cid,
+		MsgChan:     make(chan *common.Message, 32),
+		Quit:        make(chan interface{}),
+		Network:     msg.Network,
+		Address:     msg.Address,
+		NetConn:     netconn,
+		WSConn:      wsconn,
+		LastActTime: time.Now(),
 	}
 	l.Conns.Store(cid, conn)
 	select {

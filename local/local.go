@@ -4,7 +4,6 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/observerss/detour2/common"
 	"github.com/observerss/detour2/logger"
@@ -205,7 +204,7 @@ func (l *Local) CopyToWS(conn *Conn) {
 
 	buf := make([]byte, BUFFER_SIZE)
 	for {
-		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
+		// conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
 			logger.Debug.Println(conn.Cid, "copy-to-ws, read error", err)

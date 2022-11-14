@@ -76,7 +76,10 @@ func main() {
 			Password: password,
 			Proto:    proto,
 		})
-		c.RunLocal()
+		err := c.RunLocal()
+		if err != nil {
+			logger.Error.Fatal(err)
+		}
 	case "deploy":
 		cli := flag.NewFlagSet("deploy", flag.ExitOnError)
 		cli.StringVar(&mode, "m", "", "deploy 'server' or 'local'")

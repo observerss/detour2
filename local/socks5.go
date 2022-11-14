@@ -9,6 +9,7 @@ import (
 
 const (
 	PROTO_SOCKS5   = "socks5"
+	PROTO_HTTP     = "http"
 	SOCKS5_VERSION = 5
 	METHOD_NOAUTH  = 0
 	SOCKS5_CONNECT = 1
@@ -102,7 +103,7 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 	return &Request{Network: network, Address: address}, nil
 }
 
-func (s *Socks5Proto) Ack(conn net.Conn, ok bool, msg string) error {
+func (s *Socks5Proto) Ack(conn net.Conn, ok bool, msg string, req *Request) error {
 	if ok {
 		_, err := conn.Write(CMD_OK)
 		return err

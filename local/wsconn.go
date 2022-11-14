@@ -105,6 +105,11 @@ func Connect(wsconn *WSConn, force bool) error {
 	wsconn.RWLock.RLock()
 	if !wsconn.CanConnect && !force {
 		wsconn.RWLock.RUnlock()
+
+		// let the blocked websocket puller try force connect
+		if !IsClosed(wsconn.ConnChan) {
+			close(wsconn.ConnChan)
+		}
 		return errors.New("can not connect")
 	}
 	wsconn.RWLock.RUnlock()
@@ -256,6 +261,8 @@ func (ws *WSConn) WebsocketPuller() error {
 		if ok {
 			logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
 			conn.(*Conn).MsgChan <- msg
+		} else {
+
 		}
 	}
 }

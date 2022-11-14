@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/observerss/detour2/common"
 	"github.com/observerss/detour2/logger"
@@ -24,14 +25,16 @@ type Local struct {
 	Listener net.Listener
 }
 type Conn struct {
-	Cid     string
-	Wid     string
-	Quit    chan interface{}
-	Network string
-	Address string
-	MsgChan chan *common.Message
-	NetConn net.Conn
-	WSConn  *WSConn
+	Cid         string
+	Wid         string
+	Quit        chan interface{}
+	Network     string
+	Address     string
+	MsgChan     chan *common.Message
+	NetConn     net.Conn
+	WSConn      *WSConn
+	LastActTime time.Time
+	AttrLock    sync.RWMutex
 }
 
 func NewLocal(lconf *common.LocalConfig) *Local {
@@ -244,6 +247,10 @@ func (l *Local) CopyFromWS(conn *Conn) {
 		case msg = <-conn.MsgChan:
 		}
 
+		conn.AttrLock.Lock()
+		conn.LastActTime = time.Now()
+		conn.AttrLock.Unlock()
+
 		logger.Debug.Println(conn.Cid, "copy-from-ws, get <=== queue", msg.Cmd, len(msg.Data))
 		switch msg.Cmd {
 		case common.CLOSE:
@@ -284,6 +291,10 @@ func (l *Local) CopyToWS(conn *Conn) {
 			logger.Debug.Println(conn.Cid, "copy-to-ws, read error", err)
 			return
 		}
+
+		conn.AttrLock.Lock()
+		conn.LastActTime = time.Now()
+		conn.AttrLock.Unlock()
 
 		msg := &common.Message{
 			Cmd:     common.DATA,

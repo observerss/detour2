@@ -18,6 +18,7 @@ const (
 	TIME_TO_LIVE       = 596 // sec
 	RECONNECT_INTERVAL = 1   // sec
 	FLUSH_TIMEOUT      = 50  // ms
+	INACTIVE_TIMEOUT   = 600 // sec
 )
 
 type WSConn struct {
@@ -170,9 +171,12 @@ func (ws *WSConn) WebsocketPuller() error {
 		// block when num of conns are 0
 		numOfConns := 0
 		ws.Local.Conns.Range(func(key, value any) bool {
-			if value.(*Conn).WSConn == ws {
+			tmpconn := value.(*Conn)
+			tmpconn.AttrLock.RLock()
+			if tmpconn.WSConn == ws && time.Since(tmpconn.LastActTime) < time.Second*INACTIVE_TIMEOUT {
 				numOfConns += 1
 			}
+			tmpconn.AttrLock.RUnlock()
 			return true
 		})
 		if numOfConns == 0 {
@@ -262,7 +266,11 @@ func (ws *WSConn) WebsocketPuller() error {
 			logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
 			conn.(*Conn).MsgChan <- msg
 		} else {
-
+			// no handler for this conn, should tell remote to stop
+			logger.Debug.Println(msg.Cid, "ws, handler has quit, tell ws to close")
+			msg.Cmd = common.CLOSE
+			msg.Data = []byte{}
+			ws.WriteMessage(msg)
 		}
 	}
 }

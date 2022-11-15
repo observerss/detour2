@@ -185,7 +185,7 @@ func (ws *WSConn) WebsocketPuller() error {
 				ws.ConnChan = make(chan interface{})
 			}
 			ws.RWLock.Unlock()
-			logger.Debug.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
+			logger.Info.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
 			<-ws.ConnChan
 			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
 		}
@@ -256,7 +256,7 @@ func (ws *WSConn) WebsocketPuller() error {
 		logger.Debug.Println(ws.Wid, "ws, wait read")
 		msg, err := ws.ReadMessage()
 		if err != nil {
-			logger.Debug.Println(ws.Wid, "ws, read error", err)
+			logger.Error.Println(ws.Wid, "ws, read error", err)
 			continue
 		}
 

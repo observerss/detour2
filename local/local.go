@@ -239,13 +239,23 @@ func (l *Local) CopyFromWS(conn *Conn) {
 
 	logger.Debug.Println(conn.Cid, "copy-from-ws, start")
 
+	// we need to timeout the conn if TTL is passed (i.e. recovery from hibernate)
+	// **Server** websocket is closed silently at that time
+	// when that happen, close **Local** accordingly
+	// note that we MUST NOT ping remote websocket to make them alive
+	timer := time.NewTimer(TIME_TO_LIVE * time.Second)
+
 	for {
 		var msg *common.Message
 		select {
 		case <-conn.Quit:
 			logger.Debug.Println(conn.Cid, "copy-from-ws, 'quit'")
 			return
+		case <-timer.C:
+			logger.Info.Println(conn.Cid, "copy-from-ws, timeout")
+			return
 		case msg = <-conn.MsgChan:
+			timer = time.NewTimer(TIME_TO_LIVE * time.Second)
 		}
 
 		conn.AttrLock.Lock()

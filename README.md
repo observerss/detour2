@@ -47,6 +47,19 @@ bash deploy.sh quote http jy230101 tcp://47.116.180.26:7777
 bash deploy.sh quote socks5 jy230101 tcp://47.116.180.26:7777
 ```
 
+curl 验证 HTTP 和 SOCKS5 入口：
+
+```bash
+# HTTP 入口
+http_proxy=http://172.20.208.30:7777 curl http://ip.me
+
+# SOCKS5 入口，推荐 socks5h，让域名解析也走代理出口
+ALL_PROXY=socks5h://172.20.208.30:7776 curl http://ip.me
+curl --socks5-hostname 172.20.208.30:7776 http://ip.me
+```
+
+注意变量名和协议名都要写完整：`sock5_proxy=sock5://...` 不会被 curl 当成 SOCKS5 代理使用。
+
 兼容旧用法：`server` 子命令仍可作为出口节点使用；如果给 `server` 增加 `-r`，行为与 `relay` 相同，作为中间 relay 转发到下一跳。
 `-pool` 控制到下一跳的 WebSocket 连接数，默认 64；并发连接多时可以降低单条 WebSocket 上的队头阻塞。
 出口节点可以用 `-dns 8.8.8.8:53,1.1.1.1:53` 指定目标域名解析器，避免系统 DNS 把 YouTube/Google 资源解析到出口不可达的 IP。

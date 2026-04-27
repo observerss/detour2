@@ -17,6 +17,7 @@ Environment:
   GOOS/GOARCH          build target, defaults to linux/amd64
     POOL                 websocket connections per next hop, defaults to 64
     DNS                  comma-separated DNS servers for exit-node target dials
+    METRICS              optional metrics listen address, exposes /debug/metrics
   DETOUR2_USER/GROUP   systemd service user/group, defaults to root/root
   LOCAL_PROTO          local proxy protocol when LISTEN is tcp://, defaults to socks5
   SSH_OPTS/SCP_OPTS    extra SSH/SCP options, defaults include BatchMode=yes
@@ -100,6 +101,7 @@ upstream="${5:-}"
 service="detour2-$role"
 pool="${POOL:-64}"
 dns="${DNS:-}"
+metrics="${METRICS:-}"
 args=()
 
 case "$role" in
@@ -109,6 +111,9 @@ case "$role" in
         if [[ -n "$dns" ]]; then
             args+=(-dns "$dns")
         fi
+        if [[ -n "$metrics" ]]; then
+            args+=(-metrics "$metrics")
+        fi
         ;;
     relay)
         [[ "$listen" == tcp://* ]] || fail "relay LISTEN must be tcp://host:port"
@@ -116,6 +121,9 @@ case "$role" in
         args=(relay -l "$listen" -p "$password" -r "$(to_ws_url "$upstream")" -pool "$pool")
         if [[ -n "$dns" ]]; then
             args+=(-dns "$dns")
+        fi
+        if [[ -n "$metrics" ]]; then
+            args+=(-metrics "$metrics")
         fi
         ;;
     local)
@@ -134,6 +142,9 @@ case "$role" in
             *) fail "local LISTEN must be tcp://, http://, or socks5://" ;;
         esac
         args=(local -l "$listen" -p "$password" -r "$(to_ws_url "$upstream")" -t "$proto" -pool "$pool")
+        if [[ -n "$metrics" ]]; then
+            args+=(-metrics "$metrics")
+        fi
         ;;
     *)
         usage

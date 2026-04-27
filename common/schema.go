@@ -27,11 +27,12 @@ type Package struct {
 }
 
 type LocalConfig struct {
-	Listen   string `json:"listen" example:"tcp://0.0.0.0:3810"`
-	Remotes  string `json:"remotes" example:"ws://127.0.0.1:3811/ws,ws://127.0.0.1:3811/ws"`
-	Password string `json:"password" example:"pass123"`
-	Proto    string `json:"proto" example:"socks5"`
-	PoolSize int    `json:"poolSize" example:"4"`
+	Listen        string `json:"listen" example:"tcp://0.0.0.0:3810"`
+	Remotes       string `json:"remotes" example:"ws://127.0.0.1:3811/ws,ws://127.0.0.1:3811/ws"`
+	Password      string `json:"password" example:"pass123"`
+	Proto         string `json:"proto" example:"socks5"`
+	PoolSize      int    `json:"poolSize" example:"4"`
+	MetricsListen string `json:"metricsListen" example:"127.0.0.1:3819"`
 }
 
 type ServerConfig struct {
@@ -40,6 +41,7 @@ type ServerConfig struct {
 	Password      string `json:"password" example:"pass123"`
 	RelayPoolSize int    `json:"relayPoolSize" example:"4"`
 	DNSServers    string `json:"dnsServers" example:"8.8.8.8:53,1.1.1.1:53"`
+	MetricsListen string `json:"metricsListen" example:"127.0.0.1:3819"`
 }
 
 type DeployConfig struct {

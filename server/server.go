@@ -38,6 +38,8 @@ type Server struct {
 	RelayStartOnce sync.Once
 	DNSServers     []string
 	DNSCounter     uint64
+	Metrics        *common.RuntimeMetrics
+	MetricsListen  string
 }
 
 type Conn struct {
@@ -48,8 +50,26 @@ type Conn struct {
 	WSConn      *websocket.Conn
 	NetConn     net.Conn
 	WSLock      *sync.Mutex
+	WSWriter    *common.FairMessageWriter
+	TransportMu sync.RWMutex
 	Relay       *RelayClient
 	ReleaseOnce sync.Once
+}
+
+func (c *Conn) Transport() (*websocket.Conn, *common.FairMessageWriter) {
+	c.TransportMu.RLock()
+	defer c.TransportMu.RUnlock()
+	return c.WSConn, c.WSWriter
+}
+
+func (c *Conn) SetTransport(wsconn *websocket.Conn, wslock *sync.Mutex, writer *common.FairMessageWriter) *common.FairMessageWriter {
+	c.TransportMu.Lock()
+	defer c.TransportMu.Unlock()
+	oldWriter := c.WSWriter
+	c.WSConn = wsconn
+	c.WSLock = wslock
+	c.WSWriter = writer
+	return oldWriter
 }
 
 func (c *Conn) ReleaseRelay() {
@@ -61,19 +81,22 @@ func (c *Conn) ReleaseRelay() {
 }
 
 type Handle struct {
-	WSLock *sync.Mutex
-	WSConn *websocket.Conn
-	Msg    *common.Message
+	WSLock   *sync.Mutex
+	WSConn   *websocket.Conn
+	Msg      *common.Message
+	WSWriter *common.FairMessageWriter
 }
 
 func NewServer(sconf *common.ServerConfig) *Server {
 	vals := strings.Split(sconf.Listen, "://")
 	server := &Server{
-		Address:      vals[1],
-		Packer:       &common.Packer{Password: sconf.Password},
-		WSCounter:    make(map[string]int),
-		RelayClients: make(map[string]*RelayClient),
-		DNSServers:   ParseDNSServers(sconf.DNSServers),
+		Address:       vals[1],
+		Packer:        &common.Packer{Password: sconf.Password},
+		WSCounter:     make(map[string]int),
+		RelayClients:  make(map[string]*RelayClient),
+		DNSServers:    ParseDNSServers(sconf.DNSServers),
+		Metrics:       common.NewRuntimeMetrics(),
+		MetricsListen: strings.TrimSpace(sconf.MetricsListen),
 	}
 	relayPoolSize := sconf.RelayPoolSize
 	if relayPoolSize < 1 {
@@ -94,6 +117,7 @@ func NewServer(sconf *common.ServerConfig) *Server {
 
 func (s *Server) RunServer() {
 	s.StartRelayClients()
+	s.StartMetricsServer()
 	http.HandleFunc("/ws", s.HandleWebsocket)
 	http.HandleFunc("/", s.HandleIndex)
 
@@ -144,12 +168,22 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Info.Println("ws, connected")
+	if s.Metrics != nil {
+		s.Metrics.WebSocketConnectsTotal.Inc()
+		s.Metrics.WebSocketActive.Inc()
+	}
 
 	// wid, _ := common.GenerateRandomStringURLSafe(8)
 	// s.Locks.Store(wid, &Lock{})
 	lock := sync.Mutex{}
+	writer := s.NewWebsocketWriter(conn)
 
 	defer func() {
+		s.CloseWebsocketConns(conn, writer)
+		if s.Metrics != nil {
+			s.Metrics.WebSocketActive.Dec()
+		}
+		writer.Close()
 		conn.Close()
 	}()
 
@@ -158,6 +192,9 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		// conn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
+			if s.Metrics != nil {
+				s.Metrics.WebSocketReadErrors.Inc()
+			}
 			logger.Debug.Println("ws, read error", err)
 			return
 		}
@@ -171,12 +208,17 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			logger.Debug.Println("ws, unpack error", err)
 			return
 		}
+		if s.Metrics != nil {
+			s.Metrics.MessagesInTotal.Inc()
+			s.Metrics.PayloadBytesInTotal.Add(int64(len(msg.Data)))
+		}
 
 		logger.Debug.Println(msg.Cid, "ws, read", msg.Cmd, len(msg.Data))
 		handle := &Handle{
-			WSConn: conn,
-			Msg:    msg,
-			WSLock: &lock,
+			WSConn:   conn,
+			Msg:      msg,
+			WSLock:   &lock,
+			WSWriter: writer,
 		}
 
 		switch msg.Cmd {
@@ -195,6 +237,57 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) CloseWebsocketConns(wsconn *websocket.Conn, writer *common.FairMessageWriter) {
+	s.Conns.Range(func(key, value any) bool {
+		conn := value.(*Conn)
+		connWS, connWriter := conn.Transport()
+		if connWS != wsconn && connWriter != writer {
+			return true
+		}
+
+		if conn.Relay != nil {
+			msg := &common.Message{
+				Cmd:     common.CLOSE,
+				Cid:     conn.Cid,
+				Wid:     conn.Relay.Wid,
+				Network: conn.Network,
+				Address: conn.Address,
+			}
+			if err := conn.Relay.WriteMessage(msg); err != nil {
+				logger.Debug.Println(conn.Cid, "ws close, relay close write error", err)
+			}
+			conn.ReleaseRelay()
+		} else if conn.NetConn != nil {
+			conn.NetConn.Close()
+		}
+		s.Conns.Delete(key)
+		return true
+	})
+}
+
+func (s *Server) CloseRelayConns(relay *RelayClient) {
+	s.Conns.Range(func(key, value any) bool {
+		conn := value.(*Conn)
+		if conn.Relay != relay {
+			return true
+		}
+
+		msg := &common.Message{
+			Cmd:     common.CLOSE,
+			Cid:     conn.Cid,
+			Wid:     conn.Wid,
+			Network: conn.Network,
+			Address: conn.Address,
+		}
+		if err := s.SendWebosket(conn, msg); err != nil {
+			logger.Debug.Println(conn.Cid, "relay close, upstream close write error", err)
+		}
+		conn.ReleaseRelay()
+		s.Conns.Delete(key)
+		return true
+	})
+}
+
 func (s *Server) HandleConnect(handle *Handle) {
 	if s.HasNextRelay() {
 		s.HandleRelayConnect(handle)
@@ -204,20 +297,27 @@ func (s *Server) HandleConnect(handle *Handle) {
 	msg := handle.Msg
 	cid := msg.Cid
 	conn := Conn{
-		Cid:     cid,
-		Wid:     msg.Wid,
-		Network: msg.Network,
-		Address: msg.Address,
-		WSConn:  handle.WSConn,
-		WSLock:  handle.WSLock,
+		Cid:      cid,
+		Wid:      msg.Wid,
+		Network:  msg.Network,
+		Address:  msg.Address,
+		WSConn:   handle.WSConn,
+		WSLock:   handle.WSLock,
+		WSWriter: handle.WSWriter,
 	}
 
 	logger.Debug.Println(cid, "connect, open connection", msg.Network, msg.Address)
+	if s.Metrics != nil {
+		s.Metrics.ConnectAttemptsTotal.Inc()
+	}
 
 	dialer := s.Dialer()
 
 	remote, err := dialer.Dial(msg.Network, msg.Address)
 	if err != nil {
+		if s.Metrics != nil {
+			s.Metrics.ConnectFailuresTotal.Inc()
+		}
 		msg.Ok = false
 		msg.Msg = err.Error()
 		logger.Error.Println(cid, "connect, failed", err)
@@ -289,6 +389,15 @@ func (s *Server) RunLoop(conn *Conn) {
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
 			logger.Debug.Println(conn.Cid, "loop, read error", err)
+			if _, ok := s.Conns.Load(conn.Cid); ok {
+				s.SendWebosket(conn, &common.Message{
+					Cmd:     common.CLOSE,
+					Cid:     conn.Cid,
+					Wid:     conn.Wid,
+					Network: conn.Network,
+					Address: conn.Address,
+				})
+			}
 			return
 		}
 
@@ -335,18 +444,25 @@ func (s *Server) HandleData(handle *Handle) {
 	if !ok {
 		logger.Debug.Println("data,", cid, "not found")
 		logger.Debug.Println(cid, "reconnect, open connection", msg.Network, msg.Address)
+		if s.Metrics != nil {
+			s.Metrics.ConnectAttemptsTotal.Inc()
+		}
 		dialer := s.Dialer()
 		remote, err := dialer.Dial(msg.Network, msg.Address)
 		conn = &Conn{
-			Cid:     cid,
-			Wid:     msg.Wid,
-			WSLock:  handle.WSLock,
-			WSConn:  handle.WSConn,
-			NetConn: remote,
-			Network: msg.Network,
-			Address: msg.Address,
+			Cid:      cid,
+			Wid:      msg.Wid,
+			WSLock:   handle.WSLock,
+			WSConn:   handle.WSConn,
+			WSWriter: handle.WSWriter,
+			NetConn:  remote,
+			Network:  msg.Network,
+			Address:  msg.Address,
 		}
 		if err != nil {
+			if s.Metrics != nil {
+				s.Metrics.ConnectFailuresTotal.Inc()
+			}
 			logger.Error.Println(cid, "reconnect, failed", err)
 			s.SendWebosket(conn, cmsg)
 			return
@@ -361,6 +477,7 @@ func (s *Server) HandleData(handle *Handle) {
 	_, err := conn.NetConn.Write(msg.Data)
 	if err != nil {
 		logger.Debug.Println(cid, "data, write error", err)
+		conn.NetConn.Close()
 		s.Conns.Delete(cid)
 		s.SendWebosket(conn, cmsg)
 	}
@@ -379,6 +496,7 @@ func (s *Server) HandleClose(handle *Handle) {
 			return
 		}
 		conn.NetConn.Close()
+		s.Conns.Delete(handle.Msg.Cid)
 	}
 }
 
@@ -386,33 +504,33 @@ func (s *Server) HandleSwitch(handle *Handle) {
 	msg := handle.Msg
 	newconn := handle.WSConn
 	newlock := handle.WSLock
+	newwriter := handle.WSWriter
 
 	count := 0
 	total := 0
 	wid := msg.Wid
+	oldWriters := map[*common.FairMessageWriter]bool{}
 	s.Conns.Range(func(key, value any) bool {
 		total += 1
 		sconn := value.(*Conn)
-		if sconn.Wid == msg.Wid && newconn != sconn.WSConn {
-			oldlock := sconn.WSLock
-			oldlock.Lock()
-			sconn.WSConn = newconn
-			sconn.WSLock = newlock
-			oldlock.Unlock()
+		oldconn, _ := sconn.Transport()
+		if sconn.Wid == msg.Wid && newconn != oldconn {
+			oldWriter := sconn.SetTransport(newconn, newlock, newwriter)
+			if oldWriter != nil && oldWriter != newwriter {
+				oldWriters[oldWriter] = true
+			}
 			count += 1
 		}
 		return true
 	})
+	for writer := range oldWriters {
+		writer.Close()
+	}
 	logger.Info.Println(wid, "switched", count, "of", total)
 }
 
 func (s *Server) SendWebosket(conn *Conn, msg *common.Message) error {
-	conn.WSLock.Lock()
-	defer conn.WSLock.Unlock()
-	data, err := s.Packer.Pack(msg)
-	if err != nil {
-		return err
-	}
+	_, writer := conn.Transport()
 	logger.Debug.Println(msg.Cid, "send ===> websocket", msg.Cmd, len(msg.Data))
-	return conn.WSConn.WriteMessage(websocket.BinaryMessage, data)
+	return s.writeWebsocket(writer, msg)
 }

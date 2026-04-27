@@ -21,6 +21,7 @@ type RelayClient struct {
 	Wid         string
 	Connected   bool
 	WSConn      *websocket.Conn
+	Writer      *common.FairMessageWriter
 	WriteLock   sync.Mutex
 	RWLock      sync.RWMutex
 	ConnectLock sync.Mutex
@@ -101,41 +102,73 @@ func (relay *RelayClient) Connect() error {
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second * DIAL_TIMEOUT}
 	conn, _, err := dialer.Dial(relay.Url, nil)
 	if err != nil {
+		if relay.Server != nil && relay.Server.Metrics != nil {
+			relay.Server.Metrics.RelayConnectFailures.Inc()
+		}
 		relay.SetConnected(false)
 		return err
 	}
 
 	relay.WriteLock.Lock()
+	oldWriter := relay.Writer
 	if relay.WSConn != nil {
 		relay.WSConn.Close()
 	}
 	relay.WSConn = conn
+	relay.Writer = relay.NewMessageWriter(conn)
+	if oldWriter != nil {
+		oldWriter.Close()
+	}
 	relay.WriteLock.Unlock()
 	relay.SetConnected(true)
+	if relay.Server != nil && relay.Server.Metrics != nil {
+		relay.Server.Metrics.WebSocketConnectsTotal.Inc()
+	}
 	logger.Info.Println(relay.Wid, "relay, connected", relay.Url)
 	return nil
+}
+
+func (relay *RelayClient) NewMessageWriter(conn *websocket.Conn) *common.FairMessageWriter {
+	return common.NewFairMessageWriter(func(msg *common.Message) error {
+		data, err := relay.Packer.Pack(msg)
+		if err == nil {
+			err = conn.WriteMessage(websocket.BinaryMessage, data)
+		}
+		if relay.Server != nil && relay.Server.Metrics != nil {
+			if err != nil {
+				relay.Server.Metrics.WebSocketWriteErrors.Inc()
+			} else {
+				relay.Server.Metrics.MessagesOutTotal.Inc()
+				relay.Server.Metrics.PayloadBytesOutTotal.Add(int64(len(msg.Data)))
+			}
+		}
+		return err
+	}, common.DefaultMessageQueueLimit)
 }
 
 func (relay *RelayClient) WriteMessage(msg *common.Message) error {
 	if err := relay.Connect(); err != nil {
 		return err
 	}
-	data, err := relay.Packer.Pack(msg)
-	if err != nil {
-		return err
-	}
 
 	relay.WriteLock.Lock()
-	conn := relay.WSConn
-	if conn == nil {
+	writer := relay.Writer
+	if relay.WSConn == nil || writer == nil {
 		relay.WriteLock.Unlock()
 		relay.SetConnected(false)
 		return errors.New("relay websocket is not connected")
 	}
-	err = conn.WriteMessage(websocket.BinaryMessage, data)
 	relay.WriteLock.Unlock()
-	if err != nil {
+	err := writer.Write(msg)
+	if err != nil && !errors.Is(err, common.ErrMessageQueueFull) {
 		relay.SetConnected(false)
+	}
+	if relay.Server != nil && relay.Server.Metrics != nil {
+		if err != nil {
+			if errors.Is(err, common.ErrMessageQueueFull) {
+				relay.Server.Metrics.QueueFullTotal.Inc()
+			}
+		}
 	}
 	return err
 }
@@ -153,6 +186,18 @@ func (relay *RelayClient) ReadMessage() (*common.Message, error) {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
 			relay.SetConnected(false)
+			relay.WriteLock.Lock()
+			writer := relay.Writer
+			relay.WriteLock.Unlock()
+			if writer != nil {
+				writer.Close()
+			}
+			if relay.Server != nil && relay.Server.Metrics != nil {
+				relay.Server.Metrics.WebSocketReadErrors.Inc()
+			}
+			if relay.Server != nil {
+				relay.Server.CloseRelayConns(relay)
+			}
 			return nil, err
 		}
 		if mt != websocket.BinaryMessage {
@@ -161,6 +206,10 @@ func (relay *RelayClient) ReadMessage() (*common.Message, error) {
 		msg, err := relay.Packer.Unpack(data)
 		if err != nil {
 			return nil, err
+		}
+		if relay.Server != nil && relay.Server.Metrics != nil {
+			relay.Server.Metrics.MessagesInTotal.Inc()
+			relay.Server.Metrics.PayloadBytesInTotal.Add(int64(len(msg.Data)))
 		}
 		return msg, nil
 	}
@@ -210,12 +259,13 @@ func (s *Server) HandleRelayConnect(handle *Handle) {
 	msg := handle.Msg
 	cid := msg.Cid
 	conn := Conn{
-		Cid:     cid,
-		Wid:     msg.Wid,
-		Network: msg.Network,
-		Address: msg.Address,
-		WSConn:  handle.WSConn,
-		WSLock:  handle.WSLock,
+		Cid:      cid,
+		Wid:      msg.Wid,
+		Network:  msg.Network,
+		Address:  msg.Address,
+		WSConn:   handle.WSConn,
+		WSLock:   handle.WSLock,
+		WSWriter: handle.WSWriter,
 	}
 
 	logger.Debug.Println(cid, "relay, open next connection", msg.Network, msg.Address)
@@ -256,7 +306,7 @@ func (s *Server) HandleRelayData(handle *Handle) {
 	value, ok := s.Conns.Load(cid)
 	if !ok {
 		logger.Debug.Println("relay data,", cid, "not found")
-		s.SendWebosket(&Conn{Cid: cid, Wid: msg.Wid, Network: msg.Network, Address: msg.Address, WSConn: handle.WSConn, WSLock: handle.WSLock}, cmsg)
+		s.SendWebosket(&Conn{Cid: cid, Wid: msg.Wid, Network: msg.Network, Address: msg.Address, WSConn: handle.WSConn, WSLock: handle.WSLock, WSWriter: handle.WSWriter}, cmsg)
 		return
 	}
 

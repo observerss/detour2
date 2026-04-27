@@ -17,29 +17,33 @@ const (
 )
 
 type Local struct {
-	Network  string
-	Address  string
-	Packer   *common.Packer
-	Proto    Proto
-	WSConns  map[string]*WSConn // pool key => WSConn
-	Conns    sync.Map           // Cid => Conn
-	Listener net.Listener
-	Done     chan struct{}
-	StopOnce sync.Once
+	Network       string
+	Address       string
+	Packer        *common.Packer
+	Proto         Proto
+	WSConns       map[string]*WSConn // pool key => WSConn
+	Conns         sync.Map           // Cid => Conn
+	Listener      net.Listener
+	Done          chan struct{}
+	StopOnce      sync.Once
+	Metrics       *common.RuntimeMetrics
+	MetricsListen string
 }
 type Conn struct {
-	Cid         string
-	Wid         string
-	Quit        chan interface{}
-	Network     string
-	Address     string
-	MsgChan     chan *common.Message
-	NetConn     net.Conn
-	WSConn      *WSConn
-	LastActTime time.Time
-	AttrLock    sync.RWMutex
-	QuitOnce    sync.Once
-	ReleaseOnce sync.Once
+	Cid               string
+	Wid               string
+	Quit              chan interface{}
+	Network           string
+	Address           string
+	MsgChan           chan *common.Message
+	NetConn           net.Conn
+	WSConn            *WSConn
+	Metrics           *common.RuntimeMetrics
+	LastActTime       time.Time
+	AttrLock          sync.RWMutex
+	QuitOnce          sync.Once
+	ReleaseOnce       sync.Once
+	CloseUpstreamOnce sync.Once
 }
 
 func (c *Conn) CloseQuit() {
@@ -53,6 +57,27 @@ func (c *Conn) ReleaseWSConn() {
 		if c.WSConn != nil {
 			c.WSConn.AddActive(-1)
 		}
+		if c.Metrics != nil {
+			c.Metrics.ClientConnectionsClosed.Inc()
+		}
+	})
+}
+
+func (c *Conn) CloseUpstream() {
+	c.CloseUpstreamOnce.Do(func() {
+		if c.WSConn == nil {
+			return
+		}
+		msg := &common.Message{
+			Cmd:     common.CLOSE,
+			Wid:     c.Wid,
+			Cid:     c.Cid,
+			Network: c.Network,
+			Address: c.Address,
+		}
+		if err := c.WSConn.WriteMessage(msg); err != nil {
+			logger.Debug.Println(c.Cid, "close-upstream, write error", err)
+		}
 	})
 }
 
@@ -62,11 +87,13 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 	address := vals[1]
 	urls := strings.Split(lconf.Remotes, ",")
 	local := &Local{
-		Network: network,
-		Address: address,
-		Packer:  &common.Packer{Password: lconf.Password},
-		WSConns: make(map[string]*WSConn),
-		Done:    make(chan struct{}),
+		Network:       network,
+		Address:       address,
+		Packer:        &common.Packer{Password: lconf.Password},
+		WSConns:       make(map[string]*WSConn),
+		Done:          make(chan struct{}),
+		Metrics:       common.NewRuntimeMetrics(),
+		MetricsListen: strings.TrimSpace(lconf.MetricsListen),
 	}
 	switch lconf.Proto {
 	case PROTO_SOCKS5:
@@ -97,6 +124,8 @@ func (l *Local) RunLocal() error {
 	defer func() {
 		logger.Info.Println("Local server stopped.")
 	}()
+
+	l.StartMetricsServer()
 
 	listen, err := net.Listen(l.Network, l.Address)
 	l.Listener = listen
@@ -142,7 +171,13 @@ func (l *Local) StopLocal() {
 		}
 		for _, wsconn := range l.WSConns {
 			wsconn.SignalConnChan()
+			wsconn.WriteLock.Lock()
+			writer := wsconn.Writer
 			c := wsconn.WSConn
+			wsconn.WriteLock.Unlock()
+			if writer != nil {
+				writer.Close()
+			}
 			if c != nil {
 				c.Close()
 			}
@@ -175,6 +210,9 @@ func (l *Local) IsStopped() bool {
 }
 
 func (l *Local) HandleConn(netconn net.Conn) {
+	if l.Metrics != nil {
+		l.Metrics.ClientConnectionsTotal.Inc()
+	}
 	cid, _ := common.GenerateRandomStringURLSafe(6)
 	handleOk := false
 	var conn *Conn
@@ -185,10 +223,16 @@ func (l *Local) HandleConn(netconn net.Conn) {
 			netconn.Close()
 			l.Conns.Delete(cid)
 			if conn != nil {
+				conn.CloseUpstream()
 				conn.ReleaseWSConn()
 				conn.CloseQuit()
 			} else if reservedWSConn != nil {
 				reservedWSConn.AddActive(-1)
+				if l.Metrics != nil {
+					l.Metrics.ClientConnectionsClosed.Inc()
+				}
+			} else if l.Metrics != nil {
+				l.Metrics.ClientConnectionsClosed.Inc()
 			}
 		}
 	}()
@@ -204,6 +248,9 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	logger.Debug.Println(cid, "handle, get wsconn")
 	wsconn, err := l.GetWSConn()
 	if err != nil {
+		if l.Metrics != nil {
+			l.Metrics.ConnectFailuresTotal.Inc()
+		}
 		logger.Debug.Println(cid, "cannot connect to ws", err)
 		return
 	}
@@ -233,6 +280,7 @@ func (l *Local) HandleConn(netconn net.Conn) {
 		Address:     msg.Address,
 		NetConn:     netconn,
 		WSConn:      wsconn,
+		Metrics:     l.Metrics,
 		LastActTime: time.Now(),
 	}
 	reservedWSConn = nil
@@ -365,6 +413,7 @@ func (l *Local) CopyFromWS(conn *Conn) {
 func (l *Local) CopyToWS(conn *Conn) {
 	defer func() {
 		logger.Debug.Println(conn.Cid, "copy-to-ws, close conn")
+		conn.CloseUpstream()
 		conn.NetConn.Close()
 		l.Conns.Delete(conn.Cid)
 		conn.ReleaseWSConn()

@@ -95,7 +95,7 @@ func TestProxyStackSocks5MultiHopRelayEcho(t *testing.T) {
 
 	targetAddr := startTCPEchoServer(t)
 	exitRelayURL := startRelayServer(t, "")
-	middleRelayURL := startRelayServer(t, exitRelayURL)
+	middleRelay, middleRelayURL := startRelayServerWithServer(t, exitRelayURL)
 	proxyAddr := startProxyToRemote(t, PROTO_SOCKS5, middleRelayURL)
 
 	conn := dialProxy(t, proxyAddr)
@@ -115,6 +115,8 @@ func TestProxyStackSocks5MultiHopRelayEcho(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("unexpected echo payload: %q", got)
 	}
+	conn.Close()
+	waitForRelayIdle(t, middleRelay)
 }
 
 func TestProxyStackSocks5MultiHopRelayReconnects(t *testing.T) {
@@ -251,6 +253,20 @@ func disconnectRelayClient(t *testing.T, relay *server.RelayClient) {
 	}
 	relay.WriteLock.Unlock()
 	relay.SetConnected(false)
+}
+
+func waitForRelayIdle(t *testing.T, remote *server.Server) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := remote.MetricsSnapshot()
+		if snapshot.Connections.Active == 0 && snapshot.RelayPool.ActiveTotal == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	snapshot := remote.MetricsSnapshot()
+	t.Fatalf("relay did not become idle: connections=%+v relayPool=%+v", snapshot.Connections, snapshot.RelayPool)
 }
 
 func dialProxy(t *testing.T, addr string) net.Conn {

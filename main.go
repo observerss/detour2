@@ -14,24 +14,25 @@ import (
 )
 
 var (
-	password     string
-	listen       string
-	remotes      string
-	proto        string
-	debug        bool
-	mode         string
-	key          string
-	secret       string
-	accountId    string
-	region       string
-	serviceName  string
-	functionName string
-	triggerName  string
-	image        string
-	publicPort   int
-	poolSize     int
-	dnsServers   string
-	remove       bool
+	password      string
+	listen        string
+	remotes       string
+	proto         string
+	debug         bool
+	mode          string
+	key           string
+	secret        string
+	accountId     string
+	region        string
+	serviceName   string
+	functionName  string
+	triggerName   string
+	image         string
+	publicPort    int
+	poolSize      int
+	dnsServers    string
+	metricsListen string
+	remove        bool
 )
 
 func main() {
@@ -48,6 +49,7 @@ func main() {
 		ser.StringVar(&remotes, "r", "", "next relay server(s) to connect, separated by comma")
 		ser.StringVar(&dnsServers, "dns", "", "comma-separated DNS servers for direct target dials")
 		ser.IntVar(&poolSize, "pool", 64, "websocket connections per next relay")
+		ser.StringVar(&metricsListen, "metrics", "", "optional metrics listen address, exposes /debug/metrics")
 		ser.BoolVar(&debug, "d", false, "print debug log")
 
 		ser.Parse(os.Args[2:])
@@ -62,6 +64,7 @@ func main() {
 			Password:      password,
 			RelayPoolSize: poolSize,
 			DNSServers:    dnsServers,
+			MetricsListen: metricsListen,
 		})
 		s.RunServer()
 	case "local":
@@ -71,6 +74,7 @@ func main() {
 		cli.StringVar(&listen, "l", "tcp://0.0.0.0:3810", "address to listen on")
 		cli.StringVar(&proto, "t", "socks5", "target protocol to use")
 		cli.IntVar(&poolSize, "pool", 64, "websocket connections per remote server")
+		cli.StringVar(&metricsListen, "metrics", "", "optional metrics listen address, exposes /debug/metrics")
 		cli.BoolVar(&debug, "d", false, "print debug log")
 
 		cli.Parse(os.Args[2:])
@@ -80,11 +84,12 @@ func main() {
 		}
 
 		c := local.NewLocal(&common.LocalConfig{
-			Listen:   listen,
-			Remotes:  remotes,
-			Password: password,
-			Proto:    proto,
-			PoolSize: poolSize,
+			Listen:        listen,
+			Remotes:       remotes,
+			Password:      password,
+			Proto:         proto,
+			PoolSize:      poolSize,
+			MetricsListen: metricsListen,
 		})
 		err := c.RunLocal()
 		if err != nil {

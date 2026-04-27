@@ -20,7 +20,10 @@ const (
 	RECONNECT_INTERVAL = 1   // sec
 	FLUSH_TIMEOUT      = 50  // ms
 	INACTIVE_TIMEOUT   = 600 // sec
+	MSG_QUEUE_TIMEOUT  = 2   // sec
 )
+
+var msgQueueTimeout = time.Second * MSG_QUEUE_TIMEOUT
 
 type WSConn struct {
 	Url         string
@@ -30,6 +33,7 @@ type WSConn struct {
 	Connected   bool
 	ConnChan    chan interface{}
 	WSConn      *websocket.Conn
+	Writer      *common.FairMessageWriter
 	WriteLock   sync.Mutex
 	RWLock      sync.RWMutex
 	ConnectLock sync.Mutex
@@ -134,6 +138,9 @@ func Connect(wsconn *WSConn, force bool) error {
 	conn, _, err := dialer.Dial(wsconn.Url, nil)
 
 	if err != nil {
+		if wsconn.Local != nil && wsconn.Local.Metrics != nil {
+			wsconn.Local.Metrics.ConnectFailuresTotal.Inc()
+		}
 		wsconn.RWLock.Lock()
 		wsconn.CanConnect = false
 		wsconn.Connected = false
@@ -141,8 +148,18 @@ func Connect(wsconn *WSConn, force bool) error {
 		logger.Debug.Println(wsconn.Wid, "ws, dial error", err)
 		return err
 	}
+	writer := wsconn.NewMessageWriter(conn)
 	wsconn.WriteLock.Lock()
+	oldWriter := wsconn.Writer
+	oldConn := wsconn.WSConn
 	wsconn.WSConn = conn
+	wsconn.Writer = writer
+	if oldWriter != nil {
+		oldWriter.Close()
+	}
+	if oldConn != nil {
+		oldConn.Close()
+	}
 	wsconn.WriteLock.Unlock()
 
 	wsconn.RWLock.Lock()
@@ -150,9 +167,30 @@ func Connect(wsconn *WSConn, force bool) error {
 	wsconn.Connected = true
 	wsconn.CanConnect = true
 	wsconn.RWLock.Unlock()
+	if wsconn.Local != nil && wsconn.Local.Metrics != nil {
+		wsconn.Local.Metrics.WebSocketConnectsTotal.Inc()
+	}
 
 	wsconn.SignalConnChan()
 	return nil
+}
+
+func (ws *WSConn) NewMessageWriter(conn *websocket.Conn) *common.FairMessageWriter {
+	return common.NewFairMessageWriter(func(msg *common.Message) error {
+		data, err := ws.Packer.Pack(msg)
+		if err == nil {
+			err = conn.WriteMessage(websocket.BinaryMessage, data)
+		}
+		if ws.Local != nil && ws.Local.Metrics != nil {
+			if err != nil {
+				ws.Local.Metrics.WebSocketWriteErrors.Inc()
+			} else {
+				ws.Local.Metrics.MessagesOutTotal.Inc()
+				ws.Local.Metrics.PayloadBytesOutTotal.Add(int64(len(msg.Data)))
+			}
+		}
+		return err
+	}, common.DefaultMessageQueueLimit)
 }
 
 func (ws *WSConn) SignalConnChan() {
@@ -270,16 +308,22 @@ func (ws *WSConn) WebsocketPuller() error {
 					conn, ok := ws.Local.Conns.Load(msg.Cid)
 					if ok {
 						logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
-						conn.(*Conn).MsgChan <- msg
+						ws.DeliverMessage(conn.(*Conn), msg)
 					}
 				}
 
 				// finally do the switch
 				ws.WriteLock.Lock()
 				oldWSConn := ws.WSConn
+				oldWriter := ws.Writer
 				ws.WSConn = wsconn.WSConn
+				ws.Writer = wsconn.Writer
+				wsconn.Writer = nil
 				if oldWSConn != nil {
 					oldWSConn.Close()
+				}
+				if oldWriter != nil {
+					oldWriter.Close()
 				}
 				ws.WriteLock.Unlock()
 
@@ -308,7 +352,7 @@ func (ws *WSConn) WebsocketPuller() error {
 		conn, ok := ws.Local.Conns.Load(msg.Cid)
 		if ok {
 			logger.Debug.Println(msg.Cid, "ws, put ===> queue", msg.Cmd, len(msg.Data))
-			conn.(*Conn).MsgChan <- msg
+			ws.DeliverMessage(conn.(*Conn), msg)
 		} else {
 			// no handler for this conn, should tell remote to stop
 			logger.Debug.Println(msg.Cid, "ws, handler has quit, tell ws to close")
@@ -319,30 +363,63 @@ func (ws *WSConn) WebsocketPuller() error {
 	}
 }
 
+func (ws *WSConn) DeliverMessage(conn *Conn, msg *common.Message) bool {
+	timer := time.NewTimer(msgQueueTimeout)
+	defer timer.Stop()
+	select {
+	case conn.MsgChan <- msg:
+		return true
+	case <-timer.C:
+		logger.Warn.Println(conn.Cid, "ws, queue timeout, close slow conn")
+		if ws.Local != nil && ws.Local.Metrics != nil {
+			ws.Local.Metrics.QueueTimeoutsTotal.Inc()
+		}
+		ws.Local.Conns.Delete(conn.Cid)
+		conn.ReleaseWSConn()
+		conn.CloseQuit()
+		if conn.NetConn != nil {
+			conn.NetConn.Close()
+		}
+		closeMsg := common.CloneMessage(msg)
+		closeMsg.Cmd = common.CLOSE
+		closeMsg.Data = nil
+		if err := ws.WriteMessage(closeMsg); err != nil {
+			logger.Debug.Println(conn.Cid, "ws, queue timeout close write error", err)
+		}
+		return false
+	case <-ws.Local.DoneChan():
+		return false
+	}
+}
+
 func (ws *WSConn) WriteMessage(msg *common.Message) error {
 	if ws.Local.IsStopped() {
 		return errors.New("local server is stopped")
 	}
-	data, err := ws.Packer.Pack(msg)
-	if err != nil {
-		return err
-	}
 	ws.WriteLock.Lock()
-	conn := ws.WSConn
-	if conn == nil {
+	writer := ws.Writer
+	if ws.WSConn == nil || writer == nil {
 		ws.WriteLock.Unlock()
 		ws.RWLock.Lock()
 		ws.Connected = false
 		ws.RWLock.Unlock()
 		return errors.New("websocket is not connected")
 	}
-	err = conn.WriteMessage(websocket.BinaryMessage, data)
+	ws.WriteLock.Unlock()
+
+	err := writer.Write(msg)
 	ws.RWLock.Lock()
-	if err != nil {
+	if err != nil && !errors.Is(err, common.ErrMessageQueueFull) {
 		ws.Connected = false
 	}
 	ws.RWLock.Unlock()
-	ws.WriteLock.Unlock()
+	if ws.Local != nil && ws.Local.Metrics != nil {
+		if err != nil {
+			if errors.Is(err, common.ErrMessageQueueFull) {
+				ws.Local.Metrics.QueueFullTotal.Inc()
+			}
+		}
+	}
 	return err
 }
 
@@ -370,6 +447,15 @@ func (ws *WSConn) ReadMessage() (*common.Message, error) {
 			ws.RWLock.Lock()
 			ws.Connected = false
 			ws.RWLock.Unlock()
+			ws.WriteLock.Lock()
+			writer := ws.Writer
+			ws.WriteLock.Unlock()
+			if writer != nil {
+				writer.Close()
+			}
+			if ws.Local != nil && ws.Local.Metrics != nil {
+				ws.Local.Metrics.WebSocketReadErrors.Inc()
+			}
 			return nil, err
 		}
 		if mt != websocket.BinaryMessage {
@@ -378,6 +464,10 @@ func (ws *WSConn) ReadMessage() (*common.Message, error) {
 		msg, err := ws.Packer.Unpack(data)
 		if err != nil {
 			return nil, err
+		}
+		if ws.Local != nil && ws.Local.Metrics != nil {
+			ws.Local.Metrics.MessagesInTotal.Inc()
+			ws.Local.Metrics.PayloadBytesInTotal.Add(int64(len(msg.Data)))
 		}
 		return msg, nil
 	}

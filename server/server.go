@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	BUFFER_SIZE  = 16 * 1024
+	BUFFER_SIZE  = 64 * 1024
 	READ_TIMEOUT = 60
 	DIAL_TIMEOUT = 3
 )
@@ -28,20 +29,35 @@ const (
 var upgrader = websocket.Upgrader{}
 
 type Server struct {
-	Address   string
-	Packer    *common.Packer
-	Conns     sync.Map       // Cid => Conn
-	WSCounter map[string]int // Wid => num of NetConns
+	Address        string
+	Packer         *common.Packer
+	Conns          sync.Map       // Cid => Conn
+	WSCounter      map[string]int // Wid => num of NetConns
+	WSCounterLock  sync.Mutex
+	RelayClients   map[string]*RelayClient
+	RelayStartOnce sync.Once
+	DNSServers     []string
+	DNSCounter     uint64
 }
 
 type Conn struct {
-	Wid     string // wsid
-	Cid     string // connid
-	Network string
-	Address string
-	WSConn  *websocket.Conn
-	NetConn net.Conn
-	WSLock  *sync.Mutex
+	Wid         string // wsid
+	Cid         string // connid
+	Network     string
+	Address     string
+	WSConn      *websocket.Conn
+	NetConn     net.Conn
+	WSLock      *sync.Mutex
+	Relay       *RelayClient
+	ReleaseOnce sync.Once
+}
+
+func (c *Conn) ReleaseRelay() {
+	c.ReleaseOnce.Do(func() {
+		if c.Relay != nil {
+			c.Relay.AddActive(-1)
+		}
+	})
 }
 
 type Handle struct {
@@ -53,14 +69,31 @@ type Handle struct {
 func NewServer(sconf *common.ServerConfig) *Server {
 	vals := strings.Split(sconf.Listen, "://")
 	server := &Server{
-		Address:   vals[1],
-		Packer:    &common.Packer{Password: sconf.Password},
-		WSCounter: make(map[string]int),
+		Address:      vals[1],
+		Packer:       &common.Packer{Password: sconf.Password},
+		WSCounter:    make(map[string]int),
+		RelayClients: make(map[string]*RelayClient),
+		DNSServers:   ParseDNSServers(sconf.DNSServers),
+	}
+	relayPoolSize := sconf.RelayPoolSize
+	if relayPoolSize < 1 {
+		relayPoolSize = 1
+	}
+	for _, url := range strings.Split(sconf.Remotes, ",") {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		for i := 0; i < relayPoolSize; i++ {
+			wid, _ := common.GenerateRandomStringURLSafe(3)
+			server.RelayClients[fmt.Sprintf("%s#%d", url, i)] = NewRelayClient(url, wid, server)
+		}
 	}
 	return server
 }
 
 func (s *Server) RunServer() {
+	s.StartRelayClients()
 	http.HandleFunc("/ws", s.HandleWebsocket)
 	http.HandleFunc("/", s.HandleIndex)
 
@@ -163,6 +196,11 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleConnect(handle *Handle) {
+	if s.HasNextRelay() {
+		s.HandleRelayConnect(handle)
+		return
+	}
+
 	msg := handle.Msg
 	cid := msg.Cid
 	conn := Conn{
@@ -176,7 +214,7 @@ func (s *Server) HandleConnect(handle *Handle) {
 
 	logger.Debug.Println(cid, "connect, open connection", msg.Network, msg.Address)
 
-	dialer := net.Dialer{Timeout: time.Second * DIAL_TIMEOUT}
+	dialer := s.Dialer()
 
 	remote, err := dialer.Dial(msg.Network, msg.Address)
 	if err != nil {
@@ -200,42 +238,48 @@ func (s *Server) HandleConnect(handle *Handle) {
 	logger.Debug.Println(cid, "connect, done")
 }
 
+func (s *Server) incrementWSCounter(wid string) int {
+	s.WSCounterLock.Lock()
+	defer s.WSCounterLock.Unlock()
+	if s.WSCounter == nil {
+		s.WSCounter = make(map[string]int)
+	}
+	n := s.WSCounter[wid] + 1
+	s.WSCounter[wid] = n
+	return n
+}
+
+func (s *Server) decrementWSCounter(wid string) int {
+	s.WSCounterLock.Lock()
+	defer s.WSCounterLock.Unlock()
+	n, ok := s.WSCounter[wid]
+	if !ok {
+		return 0
+	}
+	n -= 1
+	if n <= 0 {
+		delete(s.WSCounter, wid)
+		return 0
+	}
+	s.WSCounter[wid] = n
+	return n
+}
+
 func (s *Server) RunLoop(conn *Conn) {
 	// TODO: debug this, the loop is broken
-	logger.Info.Println(conn.Cid, "loop, start")
+	logger.Debug.Println(conn.Cid, "loop, start")
 	defer func() {
-		logger.Info.Println(conn.Cid, "loop, quit")
+		logger.Debug.Println(conn.Cid, "loop, quit")
 		conn.NetConn.Close()
 		s.Conns.Delete(conn.Cid)
 
 		// recalculate wscounter
-		conn.WSLock.Lock()
-		n, ok := s.WSCounter[conn.Wid]
-		if ok {
-			n -= 1
-			if n == 0 {
-				delete(s.WSCounter, conn.Wid)
-
-				// if no clients on on current wsconn, close it
-				logger.Info.Println(conn.Wid, "ws, closed")
-				conn.WSConn.Close()
-			} else {
-				logger.Debug.Println(conn.Wid, "current num of NetConns", n)
-				s.WSCounter[conn.Wid] = n
-			}
-		}
-		conn.WSLock.Unlock()
+		n := s.decrementWSCounter(conn.Wid)
+		logger.Debug.Println(conn.Wid, "current num of NetConns", n)
 	}()
 
 	// calculate wscounter
-	conn.WSLock.Lock()
-	n, ok := s.WSCounter[conn.Wid]
-	if !ok {
-		n = 0
-	}
-	n += 1
-	s.WSCounter[conn.Wid] = n
-	conn.WSLock.Unlock()
+	s.incrementWSCounter(conn.Wid)
 
 	buf := make([]byte, BUFFER_SIZE)
 	for {
@@ -271,6 +315,11 @@ func (s *Server) RunLoop(conn *Conn) {
 }
 
 func (s *Server) HandleData(handle *Handle) {
+	if s.HasNextRelay() {
+		s.HandleRelayData(handle)
+		return
+	}
+
 	msg := handle.Msg
 	cid := msg.Cid
 	cmsg := &common.Message{
@@ -286,7 +335,7 @@ func (s *Server) HandleData(handle *Handle) {
 	if !ok {
 		logger.Debug.Println("data,", cid, "not found")
 		logger.Debug.Println(cid, "reconnect, open connection", msg.Network, msg.Address)
-		dialer := net.Dialer{Timeout: time.Second * DIAL_TIMEOUT}
+		dialer := s.Dialer()
 		remote, err := dialer.Dial(msg.Network, msg.Address)
 		conn = &Conn{
 			Cid:     cid,
@@ -320,7 +369,16 @@ func (s *Server) HandleData(handle *Handle) {
 func (s *Server) HandleClose(handle *Handle) {
 	value, ok := s.Conns.Load(handle.Msg.Cid)
 	if ok {
-		value.(*Conn).NetConn.Close()
+		conn := value.(*Conn)
+		if conn.Relay != nil {
+			msg := *handle.Msg
+			msg.Wid = conn.Relay.Wid
+			conn.Relay.WriteMessage(&msg)
+			conn.ReleaseRelay()
+			s.Conns.Delete(handle.Msg.Cid)
+			return
+		}
+		conn.NetConn.Close()
 	}
 }
 

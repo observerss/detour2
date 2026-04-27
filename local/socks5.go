@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 )
 
 const (
@@ -53,6 +54,9 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 	}
 
 	nmethods := buf[1]
+	if nr < 2+int(nmethods) {
+		return nil, errors.New("bad request, methods truncated")
+	}
 	method := -1
 	for i := 0; i < int(nmethods); i++ {
 		if buf[2+i] == METHOD_NOAUTH {
@@ -71,8 +75,8 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if nr < 10 {
-		return nil, errors.New("bad request, nr < 10")
+	if nr < 4 {
+		return nil, errors.New("bad request, nr < 4")
 	}
 
 	if buf[0] != SOCKS5_VERSION {
@@ -87,15 +91,28 @@ func (s *Socks5Proto) Get(conn net.Conn) (req *Request, err error) {
 	addrType := buf[3]
 	switch addrType {
 	case ADDR_IPV4:
+		if nr < 10 {
+			return nil, errors.New("bad request, ipv4 address truncated")
+		}
 		network = "tcp"
-		address = fmt.Sprintf("%v:%v", net.IP(buf[4:8]), binary.BigEndian.Uint16(buf[8:10]))
+		address = net.JoinHostPort(net.IP(buf[4:8]).String(), strconv.Itoa(int(binary.BigEndian.Uint16(buf[8:10]))))
 	case ADDR_DOMAIN:
+		if nr < 5 {
+			return nil, errors.New("bad request, domain length missing")
+		}
 		length := buf[4]
+		end := 5 + int(length)
+		if nr < end+2 {
+			return nil, errors.New("bad request, domain address truncated")
+		}
 		network = "tcp"
-		address = fmt.Sprintf("%v:%v", string(buf[5:5+length]), binary.BigEndian.Uint16(buf[5+length:7+length]))
+		address = net.JoinHostPort(string(buf[5:end]), strconv.Itoa(int(binary.BigEndian.Uint16(buf[end:end+2]))))
 	case ADDR_IPV6:
+		if nr < 22 {
+			return nil, errors.New("bad request, ipv6 address truncated")
+		}
 		network = "tcp6"
-		address = fmt.Sprintf("%v:%v", net.IP(buf[4:20]), binary.BigEndian.Uint16(buf[20:22]))
+		address = net.JoinHostPort(net.IP(buf[4:20]).String(), strconv.Itoa(int(binary.BigEndian.Uint16(buf[20:22]))))
 	default:
 		return nil, errors.New("unknown addr type")
 	}

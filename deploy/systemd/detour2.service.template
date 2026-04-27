@@ -1,0 +1,18 @@
+[Unit]
+Description=detour2 {{ROLE}} service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{RUN_USER}}
+Group={{RUN_GROUP}}
+WorkingDirectory=/opt/detour2
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/detour2/detour {{ARGS}}
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

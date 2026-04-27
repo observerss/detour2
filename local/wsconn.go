@@ -2,9 +2,10 @@ package local
 
 import (
 	"errors"
-	"math/rand"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/observerss/detour2/common"
@@ -32,6 +33,7 @@ type WSConn struct {
 	WriteLock   sync.Mutex
 	RWLock      sync.RWMutex
 	ConnectLock sync.Mutex
+	Active      int64
 	Packer      *common.Packer
 	Local       *Local
 }
@@ -51,42 +53,54 @@ func NewWSConn(url string, wid string, local *Local) *WSConn {
 
 // GetWSConn find one usable wsconn
 func (l *Local) GetWSConn() (*WSConn, error) {
-	length := len(l.WSConns)
-	wsconns := make([]*WSConn, 0, length)
+	if l.IsStopped() {
+		return nil, errors.New("local server is stopped")
+	}
+	wsconns := make([]*WSConn, 0, len(l.WSConns))
 	for _, w := range l.WSConns {
-		wsconns = append(wsconns, w)
+		if w.CanConnectNow() {
+			wsconns = append(wsconns, w)
+		}
 	}
-	visited := make([]byte, length)
-	for i := 0; i < length; i++ {
-		visited = append(visited, 0)
-	}
+	sort.SliceStable(wsconns, func(i, j int) bool {
+		return wsconns[i].ActiveCount() < wsconns[j].ActiveCount()
+	})
 
-	for {
-		if Sum(visited) == length {
-			return nil, errors.New("all wsconns are not reachable")
-		}
-
-		idx := rand.Intn(length)
-		if visited[idx] != 0 {
-			continue
-		}
-		wsconn := wsconns[idx]
-		if !wsconn.CanConnect {
-			visited[idx] = 1
-			continue
-		}
-
-		if !wsconn.Connected {
+	for _, wsconn := range wsconns {
+		if !wsconn.IsConnected() {
 			err := Connect(wsconn, false)
 			if err != nil {
 				logger.Error.Println("ws, connect error", err)
-				visited[idx] = 1
 				continue
 			}
 		}
 
+		wsconn.AddActive(1)
+		wsconn.SignalConnChan()
 		return wsconn, nil
 	}
+
+	return nil, errors.New("all wsconns are not reachable")
+}
+
+func (ws *WSConn) ActiveCount() int64 {
+	return atomic.LoadInt64(&ws.Active)
+}
+
+func (ws *WSConn) AddActive(delta int64) {
+	atomic.AddInt64(&ws.Active, delta)
+}
+
+func (ws *WSConn) CanConnectNow() bool {
+	ws.RWLock.RLock()
+	defer ws.RWLock.RUnlock()
+	return ws.CanConnect || ws.Connected
+}
+
+func (ws *WSConn) IsConnected() bool {
+	ws.RWLock.RLock()
+	defer ws.RWLock.RUnlock()
+	return ws.Connected
 }
 
 func Connect(wsconn *WSConn, force bool) error {
@@ -98,22 +112,23 @@ func Connect(wsconn *WSConn, force bool) error {
 		logger.Debug.Println(wsconn.Wid, "ws, try connect done")
 	}()
 
-	if wsconn.Connected {
+	if wsconn.IsConnected() {
 		logger.Debug.Println(wsconn.Wid, "ws, connected by others")
+		wsconn.SignalConnChan()
 		return nil
+	}
+	if wsconn.Local.IsStopped() {
+		return errors.New("local server is stopped")
 	}
 
 	wsconn.RWLock.RLock()
-	if !wsconn.CanConnect && !force {
-		wsconn.RWLock.RUnlock()
-
+	canConnect := wsconn.CanConnect
+	wsconn.RWLock.RUnlock()
+	if !canConnect && !force {
 		// let the blocked websocket puller try force connect
-		if !IsClosed(wsconn.ConnChan) {
-			close(wsconn.ConnChan)
-		}
+		wsconn.SignalConnChan()
 		return errors.New("can not connect")
 	}
-	wsconn.RWLock.RUnlock()
 
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second * DIAL_TIMEOUT}
 	conn, _, err := dialer.Dial(wsconn.Url, nil)
@@ -126,23 +141,29 @@ func Connect(wsconn *WSConn, force bool) error {
 		logger.Debug.Println(wsconn.Wid, "ws, dial error", err)
 		return err
 	}
+	wsconn.WriteLock.Lock()
+	wsconn.WSConn = conn
+	wsconn.WriteLock.Unlock()
+
 	wsconn.RWLock.Lock()
 	logger.Debug.Println(wsconn.Wid, "ws, connected")
 	wsconn.Connected = true
 	wsconn.CanConnect = true
 	wsconn.RWLock.Unlock()
 
-	wsconn.WriteLock.Lock()
-	wsconn.WSConn = conn
-	wsconn.WriteLock.Unlock()
-
-	if !IsClosed(wsconn.ConnChan) {
-		close(wsconn.ConnChan)
-	}
+	wsconn.SignalConnChan()
 	return nil
 }
 
-func IsClosed(ch <-chan interface{}) bool {
+func (ws *WSConn) SignalConnChan() {
+	ws.RWLock.Lock()
+	defer ws.RWLock.Unlock()
+	if !isClosed(ws.ConnChan) {
+		close(ws.ConnChan)
+	}
+}
+
+func isClosed(ch <-chan interface{}) bool {
 	select {
 	case <-ch:
 		return true
@@ -152,22 +173,22 @@ func IsClosed(ch <-chan interface{}) bool {
 	return false
 }
 
-func Sum(visited []byte) int {
-	total := 0
-	for _, v := range visited {
-		total += int(v)
-	}
-	return total
-}
-
 // WebsocketPuller
 // 1. pull message from websocket, put it to data channel
 // 2. switch to a new transport connection when ttl is reached
 func (ws *WSConn) WebsocketPuller() error {
 	var switchTimer *time.Timer
+	defer func() {
+		stopTimer(switchTimer)
+	}()
 
 	logger.Debug.Println(ws.Wid, "ws, start")
 	for {
+		if ws.Local.IsStopped() {
+			logger.Debug.Println(ws.Wid, "ws, local stopped")
+			return nil
+		}
+
 		// block when num of conns are 0
 		numOfConns := 0
 		ws.Local.Conns.Range(func(key, value any) bool {
@@ -181,36 +202,49 @@ func (ws *WSConn) WebsocketPuller() error {
 		})
 		if numOfConns == 0 {
 			ws.RWLock.Lock()
-			if IsClosed(ws.ConnChan) {
+			if isClosed(ws.ConnChan) {
 				ws.ConnChan = make(chan interface{})
 			}
+			connChan := ws.ConnChan
 			ws.RWLock.Unlock()
-			logger.Info.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
-			<-ws.ConnChan
-			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
+			logger.Debug.Println(ws.Wid, "ws, num of conns == 0, block on ConnChan")
+			select {
+			case <-connChan:
+			case <-ws.Local.DoneChan():
+				logger.Debug.Println(ws.Wid, "ws, stopped while idle")
+				return nil
+			}
+			resetTimer(&switchTimer, time.Second*time.Duration(ws.TimeToLive))
 		}
 
 		// try connect if not connected
-		if !ws.Connected {
+		if !ws.IsConnected() {
 			logger.Debug.Println(ws.Wid, "ws, wait for reconnect", numOfConns)
-			time.Sleep(time.Second * RECONNECT_INTERVAL)
+			select {
+			case <-time.After(time.Second * RECONNECT_INTERVAL):
+			case <-ws.Local.DoneChan():
+				logger.Debug.Println(ws.Wid, "ws, stopped before reconnect")
+				return nil
+			}
 			err := Connect(ws, true)
 			if err != nil {
 				continue
 			}
-			switchTimer = time.NewTimer(time.Second * time.Duration(ws.TimeToLive))
+			resetTimer(&switchTimer, time.Second*time.Duration(ws.TimeToLive))
 		}
 
 		// switch conn when ttl is reached
 		if switchTimer != nil {
 			select {
 			case <-switchTimer.C:
+				switchTimer = nil
 				// create new connection
 				logger.Debug.Println(ws.Wid, "ws, switch start")
 				wsconn := NewWSConn(ws.Url, ws.Wid, ws.Local)
 				err := Connect(wsconn, false)
 				if err != nil {
 					// use old
+					resetTimer(&switchTimer, time.Second*time.Duration(ws.TimeToLive))
 					break
 				}
 
@@ -221,6 +255,7 @@ func (ws *WSConn) WebsocketPuller() error {
 				})
 				if err != nil {
 					// use old
+					resetTimer(&switchTimer, time.Second*time.Duration(ws.TimeToLive))
 					break
 				}
 
@@ -241,13 +276,18 @@ func (ws *WSConn) WebsocketPuller() error {
 
 				// finally do the switch
 				ws.WriteLock.Lock()
-				ws.WSConn.Close()
+				oldWSConn := ws.WSConn
+				ws.WSConn = wsconn.WSConn
+				if oldWSConn != nil {
+					oldWSConn.Close()
+				}
+				ws.WriteLock.Unlock()
+
 				// reset connection status
 				ws.RWLock.Lock()
 				ws.Connected = true
 				ws.RWLock.Unlock()
-				ws.WSConn = wsconn.WSConn
-				ws.WriteLock.Unlock()
+				resetTimer(&switchTimer, time.Second*time.Duration(ws.TimeToLive))
 			default:
 			}
 		}
@@ -256,6 +296,10 @@ func (ws *WSConn) WebsocketPuller() error {
 		logger.Debug.Println(ws.Wid, "ws, wait read")
 		msg, err := ws.ReadMessage()
 		if err != nil {
+			if ws.Local.IsStopped() {
+				logger.Debug.Println(ws.Wid, "ws, stopped after read error")
+				return nil
+			}
 			logger.Error.Println(ws.Wid, "ws, read error", err)
 			continue
 		}
@@ -276,12 +320,23 @@ func (ws *WSConn) WebsocketPuller() error {
 }
 
 func (ws *WSConn) WriteMessage(msg *common.Message) error {
+	if ws.Local.IsStopped() {
+		return errors.New("local server is stopped")
+	}
 	data, err := ws.Packer.Pack(msg)
 	if err != nil {
 		return err
 	}
 	ws.WriteLock.Lock()
-	err = ws.WSConn.WriteMessage(websocket.BinaryMessage, data)
+	conn := ws.WSConn
+	if conn == nil {
+		ws.WriteLock.Unlock()
+		ws.RWLock.Lock()
+		ws.Connected = false
+		ws.RWLock.Unlock()
+		return errors.New("websocket is not connected")
+	}
+	err = conn.WriteMessage(websocket.BinaryMessage, data)
 	ws.RWLock.Lock()
 	if err != nil {
 		ws.Connected = false
@@ -291,11 +346,30 @@ func (ws *WSConn) WriteMessage(msg *common.Message) error {
 	return err
 }
 
+func resetTimer(timer **time.Timer, duration time.Duration) {
+	stopTimer(*timer)
+	*timer = time.NewTimer(duration)
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
 func (ws *WSConn) ReadMessage() (*common.Message, error) {
 	for {
 		mt, data, err := ws.WSConn.ReadMessage()
 		if err != nil {
+			ws.RWLock.Lock()
 			ws.Connected = false
+			ws.RWLock.Unlock()
 			return nil, err
 		}
 		if mt != websocket.BinaryMessage {

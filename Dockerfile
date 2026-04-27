@@ -1,5 +1,5 @@
 #syntax=docker/dockerfile:latest
-FROM golang:1.19 as builder
+FROM golang:1.26 as builder
 
 WORKDIR /src
 
@@ -13,11 +13,12 @@ RUN --mount=type=cache,id=go_mod,target=/go/pkg/mod \
     go build -o ./dist/detour .
 
 
-FROM debian:bullseye-slim as runner
+FROM debian:bookworm-slim as runner
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
+    if [ -f /etc/apt/sources.list ]; then sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list; fi \
+    && if [ -f /etc/apt/sources.list.d/debian.sources ]; then sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources; fi \
     && apt update -y \
     && apt install -y --no-install-recommends ca-certificates
 

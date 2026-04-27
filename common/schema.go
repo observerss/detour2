@@ -31,11 +31,15 @@ type LocalConfig struct {
 	Remotes  string `json:"remotes" example:"ws://127.0.0.1:3811/ws,ws://127.0.0.1:3811/ws"`
 	Password string `json:"password" example:"pass123"`
 	Proto    string `json:"proto" example:"socks5"`
+	PoolSize int    `json:"poolSize" example:"4"`
 }
 
 type ServerConfig struct {
-	Listen   string `json:"listen" example:"tcp://0.0.0.0:3811"`
-	Password string `json:"password" example:"pass123"`
+	Listen        string `json:"listen" example:"tcp://0.0.0.0:3811"`
+	Remotes       string `json:"remotes" example:"ws://127.0.0.1:3812/ws"`
+	Password      string `json:"password" example:"pass123"`
+	RelayPoolSize int    `json:"relayPoolSize" example:"4"`
+	DNSServers    string `json:"dnsServers" example:"8.8.8.8:53,1.1.1.1:53"`
 }
 
 type DeployConfig struct {

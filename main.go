@@ -29,20 +29,25 @@ var (
 	triggerName  string
 	image        string
 	publicPort   int
+	poolSize     int
+	dnsServers   string
 	remove       bool
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		logger.Error.Fatal("run with 'server'/'local'/'deploy' subcommand")
+		logger.Error.Fatal("run with 'server'/'relay'/'local'/'deploy' subcommand")
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	switch os.Args[1] {
-	case "server":
-		ser := flag.NewFlagSet("server", flag.ExitOnError)
+	case "server", "relay":
+		ser := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 		ser.StringVar(&password, "p", "password", "password for authentication")
 		ser.StringVar(&listen, "l", "tcp://0.0.0.0:3811", "address to listen on")
+		ser.StringVar(&remotes, "r", "", "next relay server(s) to connect, separated by comma")
+		ser.StringVar(&dnsServers, "dns", "", "comma-separated DNS servers for direct target dials")
+		ser.IntVar(&poolSize, "pool", 64, "websocket connections per next relay")
 		ser.BoolVar(&debug, "d", false, "print debug log")
 
 		ser.Parse(os.Args[2:])
@@ -52,8 +57,11 @@ func main() {
 		}
 
 		s := server.NewServer(&common.ServerConfig{
-			Listen:   listen,
-			Password: password,
+			Listen:        listen,
+			Remotes:       remotes,
+			Password:      password,
+			RelayPoolSize: poolSize,
+			DNSServers:    dnsServers,
 		})
 		s.RunServer()
 	case "local":
@@ -62,6 +70,7 @@ func main() {
 		cli.StringVar(&password, "p", "password", "password for authentication")
 		cli.StringVar(&listen, "l", "tcp://0.0.0.0:3810", "address to listen on")
 		cli.StringVar(&proto, "t", "socks5", "target protocol to use")
+		cli.IntVar(&poolSize, "pool", 64, "websocket connections per remote server")
 		cli.BoolVar(&debug, "d", false, "print debug log")
 
 		cli.Parse(os.Args[2:])
@@ -75,6 +84,7 @@ func main() {
 			Remotes:  remotes,
 			Password: password,
 			Proto:    proto,
+			PoolSize: poolSize,
 		})
 		err := c.RunLocal()
 		if err != nil {
@@ -136,6 +146,6 @@ func main() {
 		}
 
 	default:
-		logger.Error.Fatal("only 'server'/'local'/'deploy' subcommands are allowed")
+		logger.Error.Fatal("only 'server'/'relay'/'local'/'deploy' subcommands are allowed")
 	}
 }

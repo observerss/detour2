@@ -1,6 +1,7 @@
 package local
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -11,7 +12,7 @@ import (
 )
 
 const (
-	BUFFER_SIZE  = 16 * 1024
+	BUFFER_SIZE  = 64 * 1024
 	READ_TIMEOUT = 60 // sec
 )
 
@@ -20,9 +21,11 @@ type Local struct {
 	Address  string
 	Packer   *common.Packer
 	Proto    Proto
-	WSConns  map[string]*WSConn // url => WSConn
+	WSConns  map[string]*WSConn // pool key => WSConn
 	Conns    sync.Map           // Cid => Conn
 	Listener net.Listener
+	Done     chan struct{}
+	StopOnce sync.Once
 }
 type Conn struct {
 	Cid         string
@@ -35,6 +38,22 @@ type Conn struct {
 	WSConn      *WSConn
 	LastActTime time.Time
 	AttrLock    sync.RWMutex
+	QuitOnce    sync.Once
+	ReleaseOnce sync.Once
+}
+
+func (c *Conn) CloseQuit() {
+	c.QuitOnce.Do(func() {
+		close(c.Quit)
+	})
+}
+
+func (c *Conn) ReleaseWSConn() {
+	c.ReleaseOnce.Do(func() {
+		if c.WSConn != nil {
+			c.WSConn.AddActive(-1)
+		}
+	})
 }
 
 func NewLocal(lconf *common.LocalConfig) *Local {
@@ -47,6 +66,7 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 		Address: address,
 		Packer:  &common.Packer{Password: lconf.Password},
 		WSConns: make(map[string]*WSConn),
+		Done:    make(chan struct{}),
 	}
 	switch lconf.Proto {
 	case PROTO_SOCKS5:
@@ -56,9 +76,19 @@ func NewLocal(lconf *common.LocalConfig) *Local {
 	default:
 		logger.Error.Fatalln("proto", lconf.Proto, "not supported")
 	}
+	poolSize := lconf.PoolSize
+	if poolSize < 1 {
+		poolSize = 1
+	}
 	for _, url := range urls {
-		wid, _ := common.GenerateRandomStringURLSafe(3)
-		local.WSConns[url] = NewWSConn(url, wid, local)
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
+		}
+		for i := 0; i < poolSize; i++ {
+			wid, _ := common.GenerateRandomStringURLSafe(3)
+			local.WSConns[fmt.Sprintf("%s#%d", url, i)] = NewWSConn(url, wid, local)
+		}
 	}
 	return local
 }
@@ -84,6 +114,9 @@ func (l *Local) RunLocal() error {
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
+			if l.IsStopped() {
+				break
+			}
 			logger.Error.Println("run, accept error", err)
 			break
 		}
@@ -100,32 +133,63 @@ func (l *Local) StopLocal() {
 			logger.Error.Println(r)
 		}
 	}()
-	if l.Listener != nil {
-		l.Listener.Close()
-	}
-	for _, wsconn := range l.WSConns {
-		c := wsconn.WSConn
-		if c != nil {
-			c.Close()
+	l.StopOnce.Do(func() {
+		if l.Done != nil {
+			close(l.Done)
 		}
-	}
-	l.Conns.Range(func(key, value any) bool {
-		c := value.(*Conn).NetConn
-		if c != nil {
-			c.Close()
+		if l.Listener != nil {
+			l.Listener.Close()
 		}
-		return true
+		for _, wsconn := range l.WSConns {
+			wsconn.SignalConnChan()
+			c := wsconn.WSConn
+			if c != nil {
+				c.Close()
+			}
+		}
+		l.Conns.Range(func(key, value any) bool {
+			conn := value.(*Conn)
+			conn.CloseQuit()
+			if conn.NetConn != nil {
+				conn.NetConn.Close()
+			}
+			return true
+		})
 	})
+}
+
+func (l *Local) DoneChan() <-chan struct{} {
+	if l == nil || l.Done == nil {
+		return nil
+	}
+	return l.Done
+}
+
+func (l *Local) IsStopped() bool {
+	select {
+	case <-l.DoneChan():
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *Local) HandleConn(netconn net.Conn) {
 	cid, _ := common.GenerateRandomStringURLSafe(6)
 	handleOk := false
+	var conn *Conn
+	var reservedWSConn *WSConn
 	defer func() {
 		if !handleOk {
 			logger.Error.Println(cid, "handle, close conn")
 			netconn.Close()
 			l.Conns.Delete(cid)
+			if conn != nil {
+				conn.ReleaseWSConn()
+				conn.CloseQuit()
+			} else if reservedWSConn != nil {
+				reservedWSConn.AddActive(-1)
+			}
 		}
 	}()
 
@@ -143,6 +207,7 @@ func (l *Local) HandleConn(netconn net.Conn) {
 		logger.Debug.Println(cid, "cannot connect to ws", err)
 		return
 	}
+	reservedWSConn = wsconn
 
 	logger.Debug.Println(cid, "handle, wsconn send 'connect'")
 	msg := &common.Message{
@@ -159,7 +224,7 @@ func (l *Local) HandleConn(netconn net.Conn) {
 	}
 
 	logger.Debug.Println(cid, "handle, wait on msg channel")
-	conn := &Conn{
+	conn = &Conn{
 		Wid:         wsconn.Wid,
 		Cid:         cid,
 		MsgChan:     make(chan *common.Message, 32),
@@ -170,10 +235,14 @@ func (l *Local) HandleConn(netconn net.Conn) {
 		WSConn:      wsconn,
 		LastActTime: time.Now(),
 	}
+	reservedWSConn = nil
 	l.Conns.Store(cid, conn)
 	select {
 	case <-conn.Quit:
 		logger.Debug.Println(cid, "handle, quit before ack")
+		return
+	case <-l.DoneChan():
+		logger.Debug.Println(cid, "handle, local stopped before ack")
 		return
 	case msg = <-conn.MsgChan:
 	}
@@ -232,9 +301,10 @@ func (l *Local) HandleConn(netconn net.Conn) {
 
 func (l *Local) CopyFromWS(conn *Conn) {
 	defer func() {
-		logger.Info.Println(conn.Cid, "copy-from-ws, close conn")
+		logger.Debug.Println(conn.Cid, "copy-from-ws, close conn")
 		conn.NetConn.Close()
 		l.Conns.Delete(conn.Cid)
+		conn.ReleaseWSConn()
 	}()
 
 	logger.Debug.Println(conn.Cid, "copy-from-ws, start")
@@ -244,6 +314,7 @@ func (l *Local) CopyFromWS(conn *Conn) {
 	// when that happen, close **Local** accordingly
 	// note that we MUST NOT ping remote websocket to make them alive
 	timer := time.NewTimer(TIME_TO_LIVE * time.Second)
+	defer timer.Stop()
 
 	for {
 		var msg *common.Message
@@ -251,11 +322,20 @@ func (l *Local) CopyFromWS(conn *Conn) {
 		case <-conn.Quit:
 			logger.Debug.Println(conn.Cid, "copy-from-ws, 'quit'")
 			return
+		case <-l.DoneChan():
+			logger.Debug.Println(conn.Cid, "copy-from-ws, local stopped")
+			return
 		case <-timer.C:
 			logger.Info.Println(conn.Cid, "copy-from-ws, timeout")
 			return
 		case msg = <-conn.MsgChan:
-			timer = time.NewTimer(TIME_TO_LIVE * time.Second)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(TIME_TO_LIVE * time.Second)
 		}
 
 		conn.AttrLock.Lock()
@@ -284,12 +364,11 @@ func (l *Local) CopyFromWS(conn *Conn) {
 
 func (l *Local) CopyToWS(conn *Conn) {
 	defer func() {
-		logger.Info.Println(conn.Cid, "copy-to-ws, close conn")
+		logger.Debug.Println(conn.Cid, "copy-to-ws, close conn")
 		conn.NetConn.Close()
 		l.Conns.Delete(conn.Cid)
-		if !IsClosed(conn.Quit) {
-			close(conn.Quit)
-		}
+		conn.ReleaseWSConn()
+		conn.CloseQuit()
 	}()
 
 	logger.Debug.Println(conn.Cid, "copy-to-ws, start")

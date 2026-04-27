@@ -133,3 +133,9 @@ func TestRunLoopSendsCloseOnTargetReadError(t *testing.T) {
 		t.Fatal("conn was not removed")
 	}
 }
+
+func TestTargetIdleTimeoutAllowsHLSConnectionReuse(t *testing.T) {
+	if TARGET_IDLE_TIMEOUT <= 65*time.Second {
+		t.Fatalf("target idle timeout is too short for browser video tunnel reuse: %s", TARGET_IDLE_TIMEOUT)
+	}
+}

@@ -37,6 +37,16 @@ target service
 ./detour local -l tcp://127.0.0.1:3810 -r ws://127.0.0.1:3811/ws -p PASSWORD -t socks5 -pool 64 -metrics 127.0.0.1:3910
 ```
 
+systemd 部署脚本支持在同一台下游机器上同时部署 HTTP 和 SOCKS5 入口。HTTP 角色默认监听 `0.0.0.0:7777`，服务名为 `detour2-http`；SOCKS5 角色默认监听 `0.0.0.0:7776`，服务名为 `detour2-socks5`。旧的 `local` 角色仍保留兼容。
+
+```bash
+# HTTP 入口，默认监听 http://0.0.0.0:7777，服务名 detour2-http
+bash deploy.sh quote http jy230101 tcp://47.116.180.26:7777
+
+# SOCKS5 入口，默认监听 socks5://0.0.0.0:7776，服务名 detour2-socks5
+bash deploy.sh quote socks5 jy230101 tcp://47.116.180.26:7777
+```
+
 兼容旧用法：`server` 子命令仍可作为出口节点使用；如果给 `server` 增加 `-r`，行为与 `relay` 相同，作为中间 relay 转发到下一跳。
 `-pool` 控制到下一跳的 WebSocket 连接数，默认 64；并发连接多时可以降低单条 WebSocket 上的队头阻塞。
 出口节点可以用 `-dns 8.8.8.8:53,1.1.1.1:53` 指定目标域名解析器，避免系统 DNS 把 YouTube/Google 资源解析到出口不可达的 IP。

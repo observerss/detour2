@@ -7,15 +7,23 @@ Usage:
   bash deploy.sh HOST server LISTEN PASSWORD
   bash deploy.sh HOST relay  LISTEN PASSWORD UPSTREAM
   bash deploy.sh HOST local  LISTEN PASSWORD UPSTREAM
+    bash deploy.sh HOST http   PASSWORD UPSTREAM
+    bash deploy.sh HOST http   LISTEN PASSWORD UPSTREAM
+    bash deploy.sh HOST socks5 PASSWORD UPSTREAM
+    bash deploy.sh HOST socks5 LISTEN PASSWORD UPSTREAM
 
 Examples:
   bash deploy.sh jp server tcp://0.0.0.0:7777 jy230101
   bash deploy.sh sh relay tcp://0.0.0.0:7777 jy230101 tcp://8.216.49.30:7777
   bash deploy.sh test local http://0.0.0.0:7777 jy230101 tcp:://47.116.180.26:7777
+    bash deploy.sh test http jy230101 tcp://47.116.180.26:7777
+    bash deploy.sh test socks5 jy230101 tcp://47.116.180.26:7777
 
 Environment:
   GOOS/GOARCH          build target, defaults to linux/amd64
     POOL                 websocket connections per next hop, defaults to 64
+    HTTP_PORT            default port for http role, defaults to 7777
+    SOCKS5_PORT          default port for socks5 role, defaults to 7776
     DNS                  comma-separated DNS servers for exit-node target dials
     METRICS              optional metrics listen address, exposes /debug/metrics
   DETOUR2_USER/GROUP   systemd service user/group, defaults to root/root
@@ -94,17 +102,49 @@ build_binary() {
 
 host="$1"
 role="$2"
-listen="$(normalize_url "$3")"
-password="$4"
-upstream="${5:-}"
-
-service="detour2-$role"
+deploy_role="$role"
+unit_role="$role"
+force_proto=""
+if [[ "$role" == "http" || "$role" == "local-http" ]]; then
+    deploy_role="local"
+    unit_role="http"
+    service="detour2-http"
+    force_proto="http"
+    if [[ $# -eq 4 ]]; then
+        listen="http://0.0.0.0:${HTTP_PORT:-7777}"
+        password="$3"
+        upstream="$4"
+    else
+        listen="$(normalize_url "$3")"
+        password="$4"
+        upstream="${5:-}"
+    fi
+elif [[ "$role" == "socks5" || "$role" == "local-socks5" ]]; then
+    deploy_role="local"
+    unit_role="socks5"
+    service="detour2-socks5"
+    force_proto="socks5"
+    if [[ $# -eq 4 ]]; then
+        listen="socks5://0.0.0.0:${SOCKS5_PORT:-7776}"
+        password="$3"
+        upstream="$4"
+    else
+        listen="$(normalize_url "$3")"
+        password="$4"
+        upstream="${5:-}"
+    fi
+else
+    listen="$(normalize_url "$3")"
+    password="$4"
+    upstream="${5:-}"
+    service="detour2-$role"
+fi
 pool="${POOL:-64}"
 dns="${DNS:-}"
 metrics="${METRICS:-}"
 args=()
 
-case "$role" in
+case "$deploy_role" in
     server)
         [[ "$listen" == tcp://* ]] || fail "server LISTEN must be tcp://host:port"
         args=(server -l "$listen" -p "$password")
@@ -128,13 +168,15 @@ case "$role" in
         ;;
     local)
         [[ -n "$upstream" ]] || fail "local requires UPSTREAM"
-        proto="${LOCAL_PROTO:-socks5}"
+        proto="${force_proto:-${LOCAL_PROTO:-socks5}}"
         case "$listen" in
             http://*)
+                [[ -z "$force_proto" || "$force_proto" == "http" ]] || fail "$role LISTEN must be tcp:// or socks5://"
                 proto="http"
                 listen="tcp://${listen#http://}"
                 ;;
             socks5://*)
+                [[ -z "$force_proto" || "$force_proto" == "socks5" ]] || fail "$role LISTEN must be tcp:// or http://"
                 proto="socks5"
                 listen="tcp://${listen#socks5://}"
                 ;;
@@ -148,12 +190,12 @@ case "$role" in
         ;;
     *)
         usage
-        fail "role must be server, relay, or local"
+        fail "role must be server, relay, local, http, socks5, local-http, or local-socks5"
         ;;
 esac
 
 unit_args="$(join_systemd_args "${args[@]}")"
-unit="$(render_unit "$role" "$unit_args")"
+unit="$(render_unit "$unit_role" "$unit_args")"
 binary="$(build_binary)"
 
 echo "host:    $host"

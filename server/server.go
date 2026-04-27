@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	BUFFER_SIZE  = 64 * 1024
-	READ_TIMEOUT = 60
-	DIAL_TIMEOUT = 3
+	BUFFER_SIZE         = 64 * 1024
+	TARGET_IDLE_TIMEOUT = 10 * time.Minute
+	DIAL_TIMEOUT        = 3
 )
 
 var upgrader = websocket.Upgrader{}
@@ -385,7 +385,7 @@ func (s *Server) RunLoop(conn *Conn) {
 	for {
 		logger.Debug.Println(conn.Cid, "loop, wait read")
 
-		conn.NetConn.SetReadDeadline(time.Now().Add(time.Second * READ_TIMEOUT))
+		conn.NetConn.SetReadDeadline(time.Now().Add(TARGET_IDLE_TIMEOUT))
 		nr, err := conn.NetConn.Read(buf)
 		if err != nil {
 			logger.Debug.Println(conn.Cid, "loop, read error", err)

@@ -26,6 +26,7 @@ Environment:
     SOCKS5_PORT          default port for socks5 role, defaults to 7776
     DNS                  comma-separated DNS servers for exit-node target dials
     METRICS              optional metrics listen address, exposes /debug/metrics
+    SERVICE_SUFFIX       optional systemd service suffix for parallel chains
   DETOUR2_USER/GROUP   systemd service user/group, defaults to root/root
   LOCAL_PROTO          local proxy protocol when LISTEN is tcp://, defaults to socks5
   SSH_OPTS/SCP_OPTS    extra SSH/SCP options, defaults include BatchMode=yes
@@ -142,6 +143,14 @@ fi
 pool="${POOL:-64}"
 dns="${DNS:-}"
 metrics="${METRICS:-}"
+service_suffix="${SERVICE_SUFFIX:-}"
+if [[ -n "$service_suffix" ]]; then
+    case "$service_suffix" in
+        *[!a-zA-Z0-9_.@-]*) fail "SERVICE_SUFFIX contains unsupported characters: $service_suffix" ;;
+    esac
+    service="${service}-${service_suffix}"
+    unit_role="${unit_role}-${service_suffix}"
+fi
 args=()
 
 case "$deploy_role" in

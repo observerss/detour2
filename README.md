@@ -41,24 +41,26 @@ systemd 部署脚本支持在同一台下游机器上同时部署 HTTP 和 SOCKS
 
 ```bash
 # HTTP 入口，默认监听 http://0.0.0.0:7777，服务名 detour2-http
-bash deploy.sh quote http jy230101 tcp://47.116.180.26:7777
+bash deploy.sh local-host http PASSWORD tcp://relay.example.com:7777
 
 # SOCKS5 入口，默认监听 socks5://0.0.0.0:7776，服务名 detour2-socks5
-bash deploy.sh quote socks5 jy230101 tcp://47.116.180.26:7777
+bash deploy.sh local-host socks5 PASSWORD tcp://relay.example.com:7777
 ```
 
 curl 验证 HTTP 和 SOCKS5 入口：
 
 ```bash
 # HTTP 入口
-http_proxy=http://172.20.208.30:7777 curl http://ip.me
+http_proxy=http://127.0.0.1:7777 curl http://ip.me
 
 # SOCKS5 入口，推荐 socks5h，让域名解析也走代理出口
-ALL_PROXY=socks5h://172.20.208.30:7776 curl http://ip.me
-curl --socks5-hostname 172.20.208.30:7776 http://ip.me
+ALL_PROXY=socks5h://127.0.0.1:7776 curl http://ip.me
+curl --socks5-hostname 127.0.0.1:7776 http://ip.me
 ```
 
 注意变量名和协议名都要写完整：`sock5_proxy=sock5://...` 不会被 curl 当成 SOCKS5 代理使用。
+
+如果同一台机器要部署多组链路，可以用 `SERVICE_SUFFIX` 给 systemd 服务名加后缀，避免覆盖已有服务。生产公网拓扑、真实主机地址和端口属于私有部署信息，记录在本地忽略文件 `TOPOLOGY.local.md` 中，不提交到 Git。
 
 兼容旧用法：`server` 子命令仍可作为出口节点使用；如果给 `server` 增加 `-r`，行为与 `relay` 相同，作为中间 relay 转发到下一跳。
 `-pool` 控制到下一跳的 WebSocket 连接数，默认 64；并发连接多时可以降低单条 WebSocket 上的队头阻塞。

@@ -5,3 +5,4 @@ build/*
 *.pprof
 config.json
 client.sh
+TOPOLOGY.local.md

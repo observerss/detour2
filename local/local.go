@@ -24,6 +24,7 @@ type Local struct {
 	WSConns       map[string]*WSConn // pool key => WSConn
 	Conns         sync.Map           // Cid => Conn
 	Listener      net.Listener
+	ListenerLock  sync.Mutex // guards Listener against a concurrent StopLocal
 	Done          chan struct{}
 	StopOnce      sync.Once
 	Metrics       *common.RuntimeMetrics
@@ -128,10 +129,18 @@ func (l *Local) RunLocal() error {
 	l.StartMetricsServer()
 
 	listen, err := net.Listen(l.Network, l.Address)
-	l.Listener = listen
 	if err != nil {
 		return err
 	}
+	l.ListenerLock.Lock()
+	if l.IsStopped() {
+		// StopLocal ran before we had a listener to close
+		l.ListenerLock.Unlock()
+		listen.Close()
+		return nil
+	}
+	l.Listener = listen
+	l.ListenerLock.Unlock()
 
 	logger.Info.Println("Listening on " + l.Network + "://" + l.Address)
 
@@ -163,12 +172,14 @@ func (l *Local) StopLocal() {
 		}
 	}()
 	l.StopOnce.Do(func() {
+		l.ListenerLock.Lock()
 		if l.Done != nil {
 			close(l.Done)
 		}
 		if l.Listener != nil {
 			l.Listener.Close()
 		}
+		l.ListenerLock.Unlock()
 		for _, wsconn := range l.WSConns {
 			wsconn.SignalConnChan()
 			wsconn.WriteLock.Lock()
